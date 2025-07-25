@@ -1,4 +1,3 @@
-/* --- 您需要包含的头文件 --- */
 #include <stdio.h>
 #include <string.h>
 #include <sys/param.h>
@@ -9,88 +8,81 @@
 #include "esp_log.h"
 #include "esp_vfs.h"
 #include "esp_http_server.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/semphr.h"
 #include "cJSON.h"
 
+// 包含我们重构后的播放器头文件
+#include "wave_player.h"
+
+static const char *TAG = "HTTP_SERVER";
+
 // 定义文件路径和缓冲区大小
-#define FILE_PATH_MAX (ESP_VFS_PATH_MAX + 128)
+#define FILE_PATH_MAX_LOCAL (ESP_VFS_PATH_MAX + 128)
 #define SCRATCH_BUFSIZE 8192
 
-// 定义播放模式的枚举类型
-typedef enum
+/**
+ * @brief HTTP服务器上下文结构
+ * 存取静态文件服务需要的数据
+ */
+typedef struct
 {
-    PLAY_MODE_REPEAT_LIST, // 列表循环
-    PLAY_MODE_SHUFFLE,     // 随机播放
-    PLAY_MODE_REPEAT_ONE,  // 单曲循环
-} play_mode_t;
-
-// 包含文件服务和播放器状态的上下文结构体
-struct player_context_data
-{
-    // 文件服务相关数据
-    char base_path[ESP_VFS_PATH_MAX + 1];
+    char base_path[FILE_PATH_MAX_LOCAL + 1];
     char scratch[SCRATCH_BUFSIZE];
+} http_server_context_t;
 
-    // 音乐播放状态
-    bool is_playing;
-    play_mode_t play_mode;
-    char current_track[FILE_PATH_MAX]; // 使用更大的缓冲区以容纳完整路径
-    int current_position_sec;
-    int total_duration_sec;
-
-    // 互斥锁
-    SemaphoreHandle_t mutex;
-};
-
-static const char *TAG = "http_server";
-
-/* --- 辅助函数 (get_path_from_uri, set_content_type_from_file) --- */
-// (这部分代码与之前相同，此处省略以保持简洁)
+/* ------------------- 辅助函数 ------------------- */
 static const char *get_path_from_uri(char *dest, const char *base_path, const char *uri, size_t destsize)
 {
     const size_t base_pathlen = strlen(base_path);
     size_t pathlen = strlen(uri);
+
+    const char *quest = strchr(uri, '?');
+    if (quest)
+    {
+        pathlen = quest - uri;
+    }
+    const char *hash = strchr(uri, '#');
+    if (hash)
+    {
+        pathlen = hash - uri;
+    }
+
     if (base_pathlen + pathlen + 1 > destsize)
     {
         return NULL;
     }
+
     strcpy(dest, base_path);
     strlcpy(dest + base_pathlen, uri, pathlen + 1);
+
     return dest + base_pathlen;
 }
 
 static esp_err_t set_content_type_from_file(httpd_req_t *req, const char *filename)
 {
     if (strstr(filename, ".html"))
-    {
         return httpd_resp_set_type(req, "text/html");
-    }
-    else if (strstr(filename, ".css"))
-    {
+    if (strstr(filename, ".css"))
         return httpd_resp_set_type(req, "text/css");
-    }
-    else if (strstr(filename, ".js"))
-    {
+    if (strstr(filename, ".js"))
         return httpd_resp_set_type(req, "application/javascript");
-    }
-    else if (strstr(filename, ".png"))
-    {
+    if (strstr(filename, ".png"))
         return httpd_resp_set_type(req, "image/png");
-    }
+    if (strstr(filename, ".ico"))
+        return httpd_resp_set_type(req, "image/x-icon");
     return httpd_resp_set_type(req, "text/plain");
 }
 
-/* --- API 处理器 --- */
+/* ------------------- API 处理器 (已重构) ------------------- */
 
-/*
- * GET /api/playlist
- * 扫描音乐目录并返回JSON格式的文件列表
+/**
+ * @brief GET /api/playlist - 获取播放列表
+ * 扫描SD卡根目录，以JSON的形式返回所有wav文件
  */
 static esp_err_t api_playlist_get_handler(httpd_req_t *req)
 {
-    httpd_resp_set_type(req, "application/json");
-    const char *dirpath = "/sdcard"; // 假设音乐文件在SD卡根目录
+    http_server_context_t *ctx = (http_server_context_t *)req->user_ctx;
+    const char *dirpath = ctx->base_path;
+
     DIR *dir = opendir(dirpath);
     if (!dir)
     {
@@ -99,16 +91,17 @@ static esp_err_t api_playlist_get_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
+    httpd_resp_set_type(req, "application/json");
     httpd_resp_send_chunk(req, "[", 1);
+
     struct dirent *entry;
     bool first_entry = true;
     char filename_buf[300];
 
     while ((entry = readdir(dir)) != NULL)
     {
-        if (entry->d_type == DT_REG &&
-            (strstr(entry->d_name, ".mp3") || strstr(entry->d_name, ".wav") ||
-             strstr(entry->d_name, ".aac") || strstr(entry->d_name, ".flac")))
+        // 只查找.wav文件
+        if (entry->d_type == DT_REG && strstr(entry->d_name, ".wav"))
         {
             if (!first_entry)
             {
@@ -120,58 +113,57 @@ static esp_err_t api_playlist_get_handler(httpd_req_t *req)
         }
     }
     closedir(dir);
+
     httpd_resp_send_chunk(req, "]", 1);
-    httpd_resp_send_chunk(req, NULL, 0);
+    httpd_resp_send_chunk(req, NULL, 0); // 结束分块传输
     ESP_LOGI(TAG, "Playlist sent successfully");
     return ESP_OK;
 }
 
-/*
- * GET /api/status
- * **已实现**：返回播放器的当前状态
+/**
+ * @brief GET /api/status - 获取播放器状态
+ * 直接调用wave_player_get_status()获取当前状态
+ */
+/**
+ * @brief GET /api/status - 获取播放器状态
+ * **重构核心**: 直接调用 wave_player_get_status() 获取真实状态。
  */
 static esp_err_t api_status_get_handler(httpd_req_t *req)
 {
-    struct player_context_data *player_ctx = (struct player_context_data *)req->user_ctx;
-    char json_response[256];
+    player_status_t status;
+    wave_player_get_status(&status); // 从播放器服务获取最新状态
 
-    // 获取互斥锁以安全地读取状态
-    if (xSemaphoreTake(player_ctx->mutex, pdMS_TO_TICKS(100)) == pdTRUE)
-    {
-
-        // 从共享上下文中读取状态
-        bool playing = player_ctx->is_playing;
-        const char *track = player_ctx->current_track;
-        int position = player_ctx->current_position_sec;
-        int duration = player_ctx->total_duration_sec;
-
-        // 释放锁
-        xSemaphoreGive(player_ctx->mutex);
-
-        // 构建JSON响应
-        snprintf(json_response, sizeof(json_response),
-                 "{\"isPlaying\":%s,\"track\":\"%s\",\"position\":%d,\"duration\":%d}",
-                 playing ? "true" : "false", track, position, duration);
-
-        httpd_resp_set_type(req, "application/json");
-        httpd_resp_send(req, json_response, strlen(json_response));
+    char json_response[512];
+    
+    // 手动查找最后一个'/'来获取文件名，替代basename()
+    char *track_basename = strrchr(status.current_track, '/');
+    if (track_basename == NULL) {
+        // 如果没找到'/'，说明路径本身就是文件名
+        track_basename = status.current_track;
+    } else {
+        // 如果找到了'/'，将指针移动到'/'后面的字符，即文件名的开始
+        track_basename++;
     }
-    else
-    {
-        ESP_LOGE(TAG, "Failed to get mutex for reading status");
-        httpd_resp_set_status(req, "503 Service Unavailable");
-        httpd_resp_send(req, "Player state is busy", HTTPD_RESP_USE_STRLEN);
-        return ESP_FAIL;
-    }
+
+    snprintf(json_response, sizeof(json_response),
+             "{\"isPlaying\":%s,\"track\":\"%s\",\"position\":%lu,\"duration\":%lu}",
+             (status.state == PLAYER_STATE_PLAYING) ? "true" : "false",
+             track_basename,
+             status.current_position_sec,
+             status.total_duration_sec);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, json_response, strlen(json_response));
     return ESP_OK;
 }
 
-/*
- * POST /api/control
- * **已更新**：接收并处理前端发送的控制命令
+/**
+ * @brief GET /api/control - 发送控制命令
+ * 将HTTP请求翻译成控制命令，并且用wave_player_send_cmd()发送
  */
 static esp_err_t api_control_post_handler(httpd_req_t *req)
 {
+    http_server_context_t *ctx = (http_server_context_t *)req->user_ctx;
     char content[256];
     int total_len = req->content_len;
     if (total_len >= sizeof(content))
@@ -182,103 +174,88 @@ static esp_err_t api_control_post_handler(httpd_req_t *req)
     int received = httpd_req_recv(req, content, total_len);
     if (received <= 0)
     {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to receive command");
         return ESP_FAIL;
     }
     content[total_len] = '\0';
-    ESP_LOGI(TAG, "Control command received: %s", content);
 
     cJSON *root = cJSON_Parse(content);
     if (root == NULL)
     {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON format");
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
         return ESP_FAIL;
     }
 
     cJSON *command_item = cJSON_GetObjectItem(root, "command");
     if (!cJSON_IsString(command_item))
     {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing or invalid 'command' field");
         cJSON_Delete(root);
         return ESP_FAIL;
     }
     const char *command = command_item->valuestring;
+    ESP_LOGI(TAG, "Received command: %s", command);
 
-    struct player_context_data *player_ctx = (struct player_context_data *)req->user_ctx;
-    if (xSemaphoreTake(player_ctx->mutex, pdMS_TO_TICKS(100)) == pdTRUE)
+    player_cmd_msg_t cmd_msg;
+    bool cmd_valid = false;
+
+    if (strcmp(command, "play") == 0)
     {
+        cJSON *track_item = cJSON_GetObjectItem(root, "track");
+        if (cJSON_IsString(track_item))
+        {
+            cmd_msg.cmd = PLAYER_CMD_PLAY;
+            // 拼接完整文件路径
+            snprintf(cmd_msg.filepath, FILE_PATH_MAX, "%s/%s", ctx->base_path, track_item->valuestring);
+            cmd_valid = true;
+        }
+    }
+    else if (strcmp(command, "pause") == 0)
+    {
+        cmd_msg.cmd = PLAYER_CMD_PAUSE;
+        cmd_valid = true;
+    }
+    else if (strcmp(command, "resume") == 0)
+    {
+        cmd_msg.cmd = PLAYER_CMD_RESUME;
+        cmd_valid = true;
+    }
+    else if (strcmp(command, "stop") == 0)
+    {
+        cmd_msg.cmd = PLAYER_CMD_STOP;
+        cmd_valid = true;
+    }
+    // "seek" 和 "set_mode" 暂不处理，因为播放器后端还未实现
 
-        if (strcmp(command, "play") == 0)
+    if (cmd_valid)
+    {
+        if (wave_player_send_cmd(&cmd_msg) == ESP_OK)
         {
-            cJSON *track_item = cJSON_GetObjectItem(root, "track");
-            if (cJSON_IsString(track_item))
-            {
-                const char *track_name = track_item->valuestring;
-                ESP_LOGI(TAG, "Command: Play track -> %s", track_name);
-                player_ctx->is_playing = true;
-                strlcpy(player_ctx->current_track, track_name, sizeof(player_ctx->current_track));
-                // TODO: 通知播放器任务开始播放新文件
-            }
+            httpd_resp_sendstr(req, "Command sent successfully.");
         }
-        else if (strcmp(command, "pause") == 0)
+        else
         {
-            ESP_LOGI(TAG, "Command: Pause");
-            player_ctx->is_playing = false;
-            // TODO: 通知播放器任务暂停
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to send command to player");
         }
-        else if (strcmp(command, "resume") == 0)
-        {
-            ESP_LOGI(TAG, "Command: Resume");
-            player_ctx->is_playing = true;
-            // TODO: 通知播放器任务继续播放
-        }
-        else if (strcmp(command, "seek") == 0)
-        {
-            cJSON *value_item = cJSON_GetObjectItem(root, "value");
-            if (cJSON_IsNumber(value_item))
-            {
-                int seek_percent = value_item->valueint;
-                ESP_LOGI(TAG, "Command: Seek to %d%%", seek_percent);
-                // TODO: 计算秒数并命令播放器跳转
-            }
-        }
-        else if (strcmp(command, "set_mode") == 0)
-        {
-            cJSON *mode_item = cJSON_GetObjectItem(root, "mode");
-            if (cJSON_IsString(mode_item))
-            {
-                const char *mode_str = mode_item->valuestring;
-                ESP_LOGI(TAG, "Command: Set mode to %s", mode_str);
-                if (strcmp(mode_str, "shuffle") == 0)
-                    player_ctx->play_mode = PLAY_MODE_SHUFFLE;
-                else if (strcmp(mode_str, "repeat-one") == 0)
-                    player_ctx->play_mode = PLAY_MODE_REPEAT_ONE;
-                else
-                    player_ctx->play_mode = PLAY_MODE_REPEAT_LIST;
-            }
-        }
-
-        xSemaphoreGive(player_ctx->mutex);
     }
     else
     {
-        ESP_LOGE(TAG, "Could not get mutex to process control command");
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid command or parameters");
     }
 
     cJSON_Delete(root);
-    httpd_resp_sendstr(req, "Command received.");
     return ESP_OK;
 }
 
-/*
- * GET 
- * 通用文件下载处理器
+/* ------------------- 文件服务处理器 ------------------- */
+/**
+ * @brief 处理静态文件下载请求
+ * 根据URI获取文件路径，并发送文件内容
  */
 static esp_err_t file_download_handler(httpd_req_t *req)
 {
-    char filepath[FILE_PATH_MAX];
+    char filepath[FILE_PATH_MAX_LOCAL];
     FILE *fd = NULL;
     struct stat file_stat;
+    http_server_context_t *ctx = (http_server_context_t *)req->user_ctx;
 
     const char *uri = req->uri;
     if (strcmp(uri, "/") == 0)
@@ -286,8 +263,7 @@ static esp_err_t file_download_handler(httpd_req_t *req)
         uri = "/index.html";
     }
 
-    const char *filename = get_path_from_uri(filepath, ((struct player_context_data *)req->user_ctx)->base_path,
-                                             uri, sizeof(filepath));
+    const char *filename = get_path_from_uri(filepath, ctx->base_path, uri, sizeof(filepath));
     if (!filename)
     {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Filename too long");
@@ -304,14 +280,13 @@ static esp_err_t file_download_handler(httpd_req_t *req)
     fd = fopen(filepath, "r");
     if (!fd)
     {
-        ESP_LOGE(TAG, "Failed to read existing file : %s", filepath);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to read existing file");
         return ESP_FAIL;
     }
 
     set_content_type_from_file(req, filename);
 
-    char *chunk = ((struct player_context_data *)req->user_ctx)->scratch;
+    char *chunk = ctx->scratch;
     size_t chunksize;
     do
     {
@@ -321,8 +296,7 @@ static esp_err_t file_download_handler(httpd_req_t *req)
             if (httpd_resp_send_chunk(req, chunk, chunksize) != ESP_OK)
             {
                 fclose(fd);
-                ESP_LOGE(TAG, "File sending failed!");
-                httpd_resp_sendstr_chunk(req, NULL);
+                httpd_resp_send_chunk(req, NULL, 0);
                 httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to send file");
                 return ESP_FAIL;
             }
@@ -330,57 +304,49 @@ static esp_err_t file_download_handler(httpd_req_t *req)
     } while (chunksize != 0);
 
     fclose(fd);
-    ESP_LOGI(TAG, "File sending complete");
+    ESP_LOGI(TAG, "File sending complete: %s", filename);
     httpd_resp_send_chunk(req, NULL, 0);
     return ESP_OK;
 }
 
-/*
- * 启动服务器的函数
- */
+/* ------------------- 服务器启动函数 ------------------- */
+
 esp_err_t start_file_and_api_server(const char *base_path)
 {
-    struct player_context_data *server_data = calloc(1, sizeof(struct player_context_data));
-    if (!server_data)
+    // 使用新的、简化的上下文结构体
+    http_server_context_t *server_ctx = calloc(1, sizeof(http_server_context_t));
+    if (!server_ctx)
     {
         return ESP_ERR_NO_MEM;
     }
-
-    strlcpy(server_data->base_path, base_path, sizeof(server_data->base_path));
-    server_data->mutex = xSemaphoreCreateMutex();
-    if (server_data->mutex == NULL)
-    {
-        ESP_LOGE(TAG, "Failed to create mutex");
-        free(server_data);
-        return ESP_FAIL;
-    }
+    strlcpy(server_ctx->base_path, base_path, sizeof(server_ctx->base_path));
 
     httpd_handle_t server = NULL;
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.uri_match_fn = httpd_uri_match_wildcard;
+    config.lru_purge_enable = true; // 启用LRU清理，对内存有限的设备友好
 
     if (httpd_start(&server, &config) != ESP_OK)
     {
         ESP_LOGE(TAG, "Failed to start file server!");
-        vSemaphoreDelete(server_data->mutex);
-        free(server_data);
+        free(server_ctx);
         return ESP_FAIL;
     }
 
     // 注册API处理器
-    httpd_uri_t playlist_api_uri = {"/api/playlist", HTTP_GET, api_playlist_get_handler, server_data};
+    const httpd_uri_t playlist_api_uri = {"/api/playlist", HTTP_GET, api_playlist_get_handler, server_ctx};
     httpd_register_uri_handler(server, &playlist_api_uri);
 
-    httpd_uri_t status_api_uri = {"/api/status", HTTP_GET, api_status_get_handler, server_data};
+    const httpd_uri_t status_api_uri = {"/api/status", HTTP_GET, api_status_get_handler, server_ctx};
     httpd_register_uri_handler(server, &status_api_uri);
 
-    httpd_uri_t control_api_uri = {"/api/control", HTTP_POST, api_control_post_handler, server_data};
+    const httpd_uri_t control_api_uri = {"/api/control", HTTP_POST, api_control_post_handler, server_ctx};
     httpd_register_uri_handler(server, &control_api_uri);
 
     // 注册通用文件处理器
-    httpd_uri_t file_download_uri = {"/*", HTTP_GET, file_download_handler, server_data};
+    const httpd_uri_t file_download_uri = {"/*", HTTP_GET, file_download_handler, server_ctx};
     httpd_register_uri_handler(server, &file_download_uri);
 
-    ESP_LOGI(TAG, "HTTP server started");
+    ESP_LOGI(TAG, "HTTP server started on port 80");
     return ESP_OK;
 }
