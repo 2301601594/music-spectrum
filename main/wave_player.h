@@ -33,11 +33,11 @@ typedef enum {
  * @brief 播放器控制指令枚举
  */
 typedef enum {
-    PLAYER_CMD_PLAY,   // 播放新文件
-    PLAYER_CMD_PAUSE,  // 暂停播放
-    PLAYER_CMD_RESUME, // 继续播放
-    PLAYER_CMD_STOP,   // 停止播放
-    PLAYER_CMD_SEEK,   // 跳转 (暂未实现，为未来预留)
+    PLAYER_CMD_PLAY,
+    PLAYER_CMD_PAUSE,
+    PLAYER_CMD_RESUME,
+    PLAYER_CMD_STOP,
+    PLAYER_CMD_SEEK,
 } player_cmd_t;
 
 /**
@@ -46,8 +46,8 @@ typedef enum {
  */
 typedef struct {
     player_cmd_t cmd;
-    char filepath[FILE_PATH_MAX]; // 播放命令需要文件路径
-    // 可以添加其他参数，如 seek_position
+    char filepath[FILE_PATH_MAX]; // 仅用于 PLAY 命令
+    int seek_percent;             // <-- 新增: 用于 SEEK 命令 (0-100)
 } player_cmd_msg_t;
 
 /**
@@ -58,6 +58,10 @@ typedef struct {
     char current_track[FILE_PATH_MAX];
     uint32_t total_duration_sec;
     uint32_t current_position_sec;
+    // 新增内部计算需要的字段
+    uint16_t num_channels;
+    uint16_t bits_per_sample;
+    uint32_t byte_rate;
 } player_status_t;
 
 /**

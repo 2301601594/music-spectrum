@@ -134,13 +134,16 @@ static esp_err_t api_status_get_handler(httpd_req_t *req)
     wave_player_get_status(&status); // 从播放器服务获取最新状态
 
     char json_response[512];
-    
+
     // 手动查找最后一个'/'来获取文件名，替代basename()
     char *track_basename = strrchr(status.current_track, '/');
-    if (track_basename == NULL) {
+    if (track_basename == NULL)
+    {
         // 如果没找到'/'，说明路径本身就是文件名
         track_basename = status.current_track;
-    } else {
+    }
+    else
+    {
         // 如果找到了'/'，将指针移动到'/'后面的字符，即文件名的开始
         track_basename++;
     }
@@ -166,78 +169,73 @@ static esp_err_t api_control_post_handler(httpd_req_t *req)
     http_server_context_t *ctx = (http_server_context_t *)req->user_ctx;
     char content[256];
     int total_len = req->content_len;
-    if (total_len >= sizeof(content))
-    {
+    if (total_len >= sizeof(content)) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Command too long");
         return ESP_FAIL;
     }
     int received = httpd_req_recv(req, content, total_len);
-    if (received <= 0)
-    {
+    if (received <= 0) {
         return ESP_FAIL;
     }
     content[total_len] = '\0';
 
     cJSON *root = cJSON_Parse(content);
-    if (root == NULL)
-    {
+    if (root == NULL) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
         return ESP_FAIL;
     }
 
     cJSON *command_item = cJSON_GetObjectItem(root, "command");
-    if (!cJSON_IsString(command_item))
-    {
+    if (!cJSON_IsString(command_item)) {
         cJSON_Delete(root);
         return ESP_FAIL;
     }
     const char *command = command_item->valuestring;
     ESP_LOGI(TAG, "Received command: %s", command);
 
-    player_cmd_msg_t cmd_msg;
+    player_cmd_msg_t cmd_msg = {0};
     bool cmd_valid = false;
 
-    if (strcmp(command, "play") == 0)
-    {
+    if (strcmp(command, "play") == 0) {
         cJSON *track_item = cJSON_GetObjectItem(root, "track");
-        if (cJSON_IsString(track_item))
-        {
+        if (cJSON_IsString(track_item)) {
             cmd_msg.cmd = PLAYER_CMD_PLAY;
-            // 拼接完整文件路径
             snprintf(cmd_msg.filepath, FILE_PATH_MAX, "%s/%s", ctx->base_path, track_item->valuestring);
             cmd_valid = true;
         }
-    }
-    else if (strcmp(command, "pause") == 0)
-    {
+    } else if (strcmp(command, "pause") == 0) {
         cmd_msg.cmd = PLAYER_CMD_PAUSE;
         cmd_valid = true;
-    }
-    else if (strcmp(command, "resume") == 0)
-    {
+    } else if (strcmp(command, "resume") == 0) {
         cmd_msg.cmd = PLAYER_CMD_RESUME;
         cmd_valid = true;
-    }
-    else if (strcmp(command, "stop") == 0)
-    {
+    } else if (strcmp(command, "stop") == 0) {
         cmd_msg.cmd = PLAYER_CMD_STOP;
         cmd_valid = true;
-    }
-    // "seek" 和 "set_mode" 暂不处理，因为播放器后端还未实现
-
-    if (cmd_valid)
-    {
-        if (wave_player_send_cmd(&cmd_msg) == ESP_OK)
-        {
-            httpd_resp_sendstr(req, "Command sent successfully.");
+    } else if (strcmp(command, "seek") == 0) {
+        cJSON *value_item = cJSON_GetObjectItem(root, "value");
+        // **核心修正**: 同时检查 value_item 是否为数字或字符串
+        if (value_item && (cJSON_IsNumber(value_item) || cJSON_IsString(value_item))) {
+            cmd_msg.cmd = PLAYER_CMD_SEEK;
+            if (cJSON_IsNumber(value_item)) {
+                // 如果是数字，直接取值
+                cmd_msg.seek_percent = value_item->valueint;
+            } else {
+                // 如果是字符串，使用atoi转换
+                cmd_msg.seek_percent = atoi(value_item->valuestring);
+            }
+            cmd_valid = true;
+            ESP_LOGI(TAG, "Command: Seek to %d%%", cmd_msg.seek_percent);
         }
-        else
-        {
+    }
+    
+    if (cmd_valid) {
+        if (wave_player_send_cmd(&cmd_msg) == ESP_OK) {
+            httpd_resp_sendstr(req, "Command sent successfully.");
+        } else {
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to send command to player");
         }
-    }
-    else
-    {
+    } else {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid command or parameters");
     }
 
