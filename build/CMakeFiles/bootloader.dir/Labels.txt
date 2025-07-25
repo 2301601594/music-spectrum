@@ -1,0 +1,13 @@
+# Target labels
+ bootloader
+# Source files and their labels
+/home/dongj/esp/Code/file_serving/build/CMakeFiles/bootloader
+/home/dongj/esp/Code/file_serving/build/CMakeFiles/bootloader.rule
+/home/dongj/esp/Code/file_serving/build/CMakeFiles/bootloader-complete.rule
+/home/dongj/esp/Code/file_serving/build/bootloader-prefix/src/bootloader-stamp/bootloader-build.rule
+/home/dongj/esp/Code/file_serving/build/bootloader-prefix/src/bootloader-stamp/bootloader-configure.rule
+/home/dongj/esp/Code/file_serving/build/bootloader-prefix/src/bootloader-stamp/bootloader-download.rule
+/home/dongj/esp/Code/file_serving/build/bootloader-prefix/src/bootloader-stamp/bootloader-install.rule
+/home/dongj/esp/Code/file_serving/build/bootloader-prefix/src/bootloader-stamp/bootloader-mkdir.rule
+/home/dongj/esp/Code/file_serving/build/bootloader-prefix/src/bootloader-stamp/bootloader-patch.rule
+/home/dongj/esp/Code/file_serving/build/bootloader-prefix/src/bootloader-stamp/bootloader-update.rule

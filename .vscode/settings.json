@@ -1,0 +1,27 @@
+{
+  "C_Cpp.intelliSenseEngine": "default",
+  "idf.espIdfPath": "/home/dongj/esp/v5.4.2/esp-idf",
+  "idf.toolsPath": "/home/dongj/.espressif",
+  "idf.pythonInstallPath": "/usr/bin/python3",
+  "idf.openOcdConfigs": [
+    "board/esp32s3-builtin.cfg"
+  ],
+  "idf.customExtraVars": {
+    "IDF_TARGET": "esp32s3"
+  },
+  "clangd.path": "/home/dongj/.espressif/tools/esp-clang/esp-18.1.2_20240912/esp-clang/bin/clangd",
+  "clangd.arguments": [
+    "--background-index",
+    "--query-driver=/home/dongj/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc",
+    "--compile-commands-dir=/home/dongj/esp/Code/file_serving/build"
+  ],
+  "idf.port": "/dev/ttyACM0",
+  "idf.flashType": "UART",
+  "files.associations": {
+    "esp_http_server.h": "c",
+    "sdkconfig.h": "c",
+    "freertos.h": "c",
+    "task.h": "c",
+    "inttypes.h": "c"
+  }
+}

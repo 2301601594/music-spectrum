@@ -1,0 +1,2 @@
+source /home/dongj/esp/Code/file_serving/build/bootloader/gdbinit/symbols
+source /home/dongj/esp/Code/file_serving/build/bootloader/gdbinit/connect
