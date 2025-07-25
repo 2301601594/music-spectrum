@@ -4,7 +4,7 @@
 #include "esp_err.h"
 
 // ---配置常量---
-#define FFT_N 1024         // FFT采样点数
+#define FFT_N 512         // FFT采样点数
 #define NUM_BANDS 32       // 最终输出的频带数量
 #define MATRIX_HEIGHT 16   // 可视化矩阵高度
 
