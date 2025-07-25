@@ -14,10 +14,99 @@
 #define I2S_DO_IO GPIO_NUM_12
 #define I2S_NUM I2S_NUM_0
 
-// WAV file path in SD card root
-#define WAV_FILE_PATH "/sdcard/周杰伦 - 夜曲.wav"
-#define READ_BUFFER_SIZE 1024
-// WAV header Structure
+// 文件最长路径
+#define FILE_PATH_MAX 256
+// I2S读取/写入缓存区大小
+#define I2S_BUFFER_SIZE 1024
+
+/** 
+* @brief 播放器状态枚举
+*/
+typedef enum {
+    PLAYER_STATE_STOPPED,  // 停止
+    PLAYER_STATE_PLAYING,  // 播放中
+    PLAYER_STATE_PAUSED,  // 暂停
+} player_state_t;
+
+
+/**
+ * @brief 播放器控制指令枚举
+ */
+typedef enum {
+    PLAYER_CMD_PLAY,   // 播放新文件
+    PLAYER_CMD_PAUSE,  // 暂停播放
+    PLAYER_CMD_RESUME, // 继续播放
+    PLAYER_CMD_STOP,   // 停止播放
+    PLAYER_CMD_SEEK,   // 跳转 (暂未实现，为未来预留)
+} player_cmd_t;
+
+/**
+ * @brief 播放器命令消息结构体
+ * 用于通过队列在任务间传递命令
+ */
+typedef struct {
+    player_cmd_t cmd;
+    char filepath[FILE_PATH_MAX]; // 播放命令需要文件路径
+    // 可以添加其他参数，如 seek_position
+} player_cmd_msg_t;
+
+/**
+ * @brief 播放器当前状态信息结构体
+ */
+typedef struct {
+    player_state_t state;
+    char current_track[FILE_PATH_MAX];
+    uint32_t total_duration_sec;
+    uint32_t current_position_sec;
+} player_status_t;
+
+/**
+ * @brief FFT 数据回调函数指针类型
+ * 当播放器解码出新的音频数据时，会通过此回调函数将数据传出
+ * @param data 指向16位PCM音频数据的指针
+ * @param len  数据点的数量 (不是字节数)
+ */
+typedef void (*fft_data_callback_t)(const int16_t *data, int len);
+
+/**
+ * @brief 初始化播放器
+ *
+ * 该函数会创建播放器任务和相关的FreeRTOS资源。
+ * 必须在使用播放器前调用一次。
+ *
+ * @return esp_err_t ESP_OK 表示成功, 其他表示失败
+ */
+esp_err_t wave_player_init(void);
+
+/**
+ * @brief 向播放器发送控制命令
+ *
+ * 这是控制播放器的主要方式。
+ *
+ * @param msg 指向命令消息结构体的指针
+ * @return esp_err_t ESP_OK 表示成功, 其他表示失败
+ */
+esp_err_t wave_player_send_cmd(player_cmd_msg_t *msg);
+
+/**
+ * @brief 注册FFT数据回调函数
+ *
+ * FFT处理任务可以通过此函数注册一个回调，从而实时获取音频数据。
+ *
+ * @param callback 要注册的回调函数
+ */
+void wave_player_register_fft_callback(fft_data_callback_t callback);
+
+/**
+ * @brief 获取播放器当前状态
+ *
+ * 供Web服务器等其他模块查询播放器的实时状态。
+ *
+ * @param status 指向一个 player_status_t 结构体的指针，用于接收状态信息
+ */
+void wave_player_get_status(player_status_t *status);
+
+// WAV 文件头结构
 typedef struct
 {
   char riff_header[4];     // "RIFF"
@@ -34,5 +123,3 @@ typedef struct
   char data_header[4]; // "data"
   uint32_t data_size;  // size of data section
 } wav_header_t;
-// 播放函数
-void play_wav(const char *filepath);
