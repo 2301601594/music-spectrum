@@ -83,5 +83,7 @@
 /home/dongj/esp/Code/file_serving/build/esp-idf/touch_element/libtouch_element.a
 /home/dongj/esp/Code/file_serving/build/esp-idf/usb/libusb.a
 /home/dongj/esp/Code/file_serving/build/esp-idf/wifi_provisioning/libwifi_provisioning.a
+/home/dongj/esp/Code/file_serving/build/esp-idf/espressif__esp-dsp/libespressif__esp-dsp.a
+/home/dongj/esp/Code/file_serving/build/esp-idf/espressif__led_strip/libespressif__led_strip.a
 /home/dongj/esp/Code/file_serving/build/esp-idf/protocol_examples_common/libprotocol_examples_common.a
 /home/dongj/esp/Code/file_serving/build/esp-idf/main/libmain.a

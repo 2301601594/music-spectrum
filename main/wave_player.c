@@ -3,6 +3,7 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "esp_vfs_fat.h"
+#include "fft_analyzer.h"
 
 static const char *TAG = "WAVE_PLAYER";
 
@@ -15,7 +16,6 @@ static SemaphoreHandle_t status_mutex = NULL;  // 状态互斥锁
 static player_status_t internal_status;         // 播放器状态
 static FILE *current_fp = NULL;                 // 当前文件指针
 static i2s_chan_handle_t tx_handle = NULL;      // I2S 发送通道句柄
-static fft_data_callback_t fft_callback = NULL; // FFT 数据回调函数指针
 static uint32_t data_start_pos = 0;             // WAV文件数据区的起始位置
 static uint32_t total_data_bytes = 0;           // 数据区总字节数
 
@@ -79,9 +79,9 @@ static void wave_player_task(void *pvParameters)
       if (bytes_read > 0)
       {
         i2s_channel_write(tx_handle, read_buf, bytes_read, &bytes_written, portMAX_DELAY);
-        if (fft_callback)
+        if (bytes_written > 0)
         {
-          fft_callback((const int16_t *)read_buf, bytes_read / 2);
+          fft_analyzer_push_audio_data((int16_t *)read_buf, bytes_written / 2, internal_status.num_channels);
         }
 
         // 更新播放进度
@@ -99,7 +99,6 @@ static void wave_player_task(void *pvParameters)
       {
         ESP_LOGI(TAG, "End of file reached.");
         player_handle_stop();
-        // 可在此处添加自动播放下一首的逻辑
       }
     }
   }
@@ -115,57 +114,64 @@ static void wave_player_task(void *pvParameters)
  */
 static void player_handle_seek(player_cmd_msg_t *msg)
 {
-    // 只有在播放或暂停时才能Seek
-    if (internal_status.state == PLAYER_STATE_STOPPED || !current_fp || total_data_bytes == 0) {
-        ESP_LOGW(TAG, "Seek command ignored: Player is stopped or no track loaded.");
-        return;
+  // 只有在播放或暂停时才能Seek
+  if (internal_status.state == PLAYER_STATE_STOPPED || !current_fp || total_data_bytes == 0)
+  {
+    ESP_LOGW(TAG, "Seek command ignored: Player is stopped or no track loaded.");
+    return;
+  }
+
+  if (msg->seek_percent < 0 || msg->seek_percent > 100)
+  {
+    ESP_LOGE(TAG, "Invalid seek percentage: %d", msg->seek_percent);
+    return;
+  }
+
+  // 1. 计算目标位置的字节偏移量
+  uint32_t seek_offset_bytes = (uint32_t)((total_data_bytes / 100.0f) * msg->seek_percent);
+
+  // 2. 字节对齐，确保从一个完整的采样点开始读取
+  uint16_t block_align = (internal_status.bits_per_sample / 8) * internal_status.num_channels;
+  if (block_align > 0)
+  {
+    seek_offset_bytes = (seek_offset_bytes / block_align) * block_align;
+  }
+
+  long target_pos = data_start_pos + seek_offset_bytes;
+  ESP_LOGI(TAG, "Seeking to %d%%, byte position %ld", msg->seek_percent, target_pos);
+
+  // 3. 记录seek前的状态
+  bool was_playing = (internal_status.state == PLAYER_STATE_PLAYING);
+
+  // 4. 如果正在播放，先禁用通道以停止并刷新DMA
+  if (was_playing)
+  {
+    i2s_channel_disable(tx_handle);
+  }
+
+  // 5. 使用 fseek 跳转文件指针
+  if (fseek(current_fp, target_pos, SEEK_SET) != 0)
+  {
+    ESP_LOGE(TAG, "fseek failed!");
+    // 即使fseek失败，如果之前是播放状态，也应该尝试恢复硬件状态
+    if (was_playing)
+    {
+      i2s_channel_enable(tx_handle);
     }
+    return;
+  }
 
-    if (msg->seek_percent < 0 || msg->seek_percent > 100) {
-        ESP_LOGE(TAG, "Invalid seek percentage: %d", msg->seek_percent);
-        return;
-    }
+  // 6. 如果之前是播放状态，重新使能通道以让主循环继续播放
+  if (was_playing)
+  {
+    i2s_channel_enable(tx_handle);
+  }
 
-    // 1. 计算目标位置的字节偏移量
-    uint32_t seek_offset_bytes = (uint32_t)((total_data_bytes / 100.0f) * msg->seek_percent);
-
-    // 2. 字节对齐，确保从一个完整的采样点开始读取
-    uint16_t block_align = (internal_status.bits_per_sample / 8) * internal_status.num_channels;
-    if (block_align > 0) {
-        seek_offset_bytes = (seek_offset_bytes / block_align) * block_align;
-    }
-
-    long target_pos = data_start_pos + seek_offset_bytes;
-    ESP_LOGI(TAG, "Seeking to %d%%, byte position %ld", msg->seek_percent, target_pos);
-
-    // 3. 记录seek前的状态
-    bool was_playing = (internal_status.state == PLAYER_STATE_PLAYING);
-
-    // 4. 如果正在播放，先禁用通道以停止并刷新DMA
-    if (was_playing) {
-        i2s_channel_disable(tx_handle);
-    }
-    
-    // 5. 使用 fseek 跳转文件指针
-    if (fseek(current_fp, target_pos, SEEK_SET) != 0) {
-        ESP_LOGE(TAG, "fseek failed!");
-        // 即使fseek失败，如果之前是播放状态，也应该尝试恢复硬件状态
-        if (was_playing) {
-             i2s_channel_enable(tx_handle);
-        }
-        return;
-    }
-    
-    // 6. 如果之前是播放状态，重新使能通道以让主循环继续播放
-    if (was_playing) {
-        i2s_channel_enable(tx_handle);
-    }
-
-    // 7. 更新状态中的当前秒数
-    uint32_t new_pos_sec = (uint32_t)((internal_status.total_duration_sec / 100.0f) * msg->seek_percent);
-    xSemaphoreTake(status_mutex, portMAX_DELAY);
-    internal_status.current_position_sec = new_pos_sec;
-    xSemaphoreGive(status_mutex);
+  // 7. 更新状态中的当前秒数
+  uint32_t new_pos_sec = (uint32_t)((internal_status.total_duration_sec / 100.0f) * msg->seek_percent);
+  xSemaphoreTake(status_mutex, portMAX_DELAY);
+  internal_status.current_position_sec = new_pos_sec;
+  xSemaphoreGive(status_mutex);
 }
 
 /**
@@ -337,13 +343,6 @@ esp_err_t wave_player_send_cmd(player_cmd_msg_t *msg)
   return ESP_OK;
 }
 
-/**
- * @brief 注册FFT数据回调函数
- */
-void wave_player_register_fft_callback(fft_data_callback_t callback)
-{
-  fft_callback = callback;
-}
 
 /**
  * @brief 获取播放器当前状态

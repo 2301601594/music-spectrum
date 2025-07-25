@@ -1,0 +1,116 @@
+/**
+ * @file main.c
+ * @brief ESP-IDF application to sequentially light up a 16x16 WS2812B matrix.
+ * * This version corrects the logic to show a single moving pixel.
+ */
+
+#include <string.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_log.h"
+// 只需要包含这一个头文件即可
+#include "led_strip.h"
+
+#define BLINK_GPIO 21
+#define MATRIX_WIDTH         16
+#define MATRIX_HEIGHT        16
+#define LED_STRIP_MAX_LEDS   (MATRIX_WIDTH * MATRIX_HEIGHT) 
+#define TAG "LED_STRIP"
+
+
+int XY_to_index(int x, int y)
+{
+    int index;
+
+    // 使用位运算 (x & 1) 判断x是奇数还是偶数，比 x % 2 更快
+    if ((x & 1) == 0) {
+        // 偶数X列 (0, 2, ...): 走线从上到下
+        // 基础索引 = x * 16; 列内偏移 = 15 - y
+        index = (x * MATRIX_HEIGHT) + (MATRIX_HEIGHT - 1 - y);
+    } else {
+        // 奇数X列 (1, 3, ...): 走线从下到上
+        // 基础索引 = x * 16; 列内偏移 = y
+        index = (x * MATRIX_HEIGHT) + y;
+    }
+    return index;
+}
+
+
+// --- 任务函数：实现单个像素点移动 ---
+void ledTask(void *pvParm)
+{
+    led_strip_handle_t led_strip = (led_strip_handle_t)pvParm;
+    uint32_t x = 0;
+    uint32_t y = 0;
+
+    while (1) {
+        // --- 绘制对角线移动的像素点 ---
+        
+        // 1. 先清空整个屏幕
+        ESP_ERROR_CHECK(led_strip_clear(led_strip));
+
+        // 2. 使用 XY_to_index 函数计算当前坐标的索引
+        uint32_t index = XY_to_index(x, y);
+
+        // 3. 设置该索引的像素为蓝色
+        ESP_ERROR_CHECK(led_strip_set_pixel(led_strip, index, 0, 0, 50)); // 低亮度蓝色
+
+        // 4. 刷新屏幕显示
+        ESP_ERROR_CHECK(led_strip_refresh(led_strip));
+        
+        ESP_LOGI(TAG, "Drawing pixel at (x=%lu, y=%lu) -> index=%lu", x, y, index);
+
+        // 更新坐标，实现对角线移动
+        x++;
+        y++;
+        if (x >= MATRIX_WIDTH) {
+            x = 0;
+        }
+        if (y >= MATRIX_HEIGHT) {
+            y = 0;
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(100)); // 延时100毫秒
+    }
+}
+
+void app_main(void)
+{
+    // --- 初始化部分和您的代码完全一样，是正确的 ---
+
+    /// 1. LED strip common configuration
+    led_strip_config_t strip_config = {
+        .strip_gpio_num = BLINK_GPIO,
+        .max_leds = 256,
+        .led_model = LED_MODEL_WS2812,
+        .color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_GRB,
+        .flags = {
+            .invert_out = false,
+        }};
+
+    /// 2. RMT backend specific configuration
+    led_strip_rmt_config_t rmt_config = {
+        .clk_src = RMT_CLK_SRC_DEFAULT,
+        .resolution_hz = 10 * 1000 * 1000,
+        .mem_block_symbols = 64,
+        .flags = {
+            .with_dma = false,
+        }};
+
+    /// 3. Create the LED strip object
+    led_strip_handle_t led_strip = NULL;
+    ESP_ERROR_CHECK(led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip));
+
+    // 检查句柄是否创建成功，并启动任务
+    if (led_strip)
+    {
+        // 先清空一次，确保初始状态是全黑
+        ESP_ERROR_CHECK(led_strip_clear(led_strip));
+        // 创建任务
+        xTaskCreate(ledTask, "ledTask", 4096, led_strip, 5, NULL);
+    }
+    else
+    {
+        ESP_LOGE("LED_STRIP", "Failed to create LED strip");
+    }
+}

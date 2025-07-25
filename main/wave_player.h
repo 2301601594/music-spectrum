@@ -19,20 +19,21 @@
 // I2S读取/写入缓存区大小
 #define I2S_BUFFER_SIZE 1024
 
-/** 
-* @brief 播放器状态枚举
-*/
-typedef enum {
-    PLAYER_STATE_STOPPED,  // 停止
-    PLAYER_STATE_PLAYING,  // 播放中
+/**
+ * @brief 播放器状态枚举
+ */
+typedef enum
+{
+    PLAYER_STATE_STOPPED, // 停止
+    PLAYER_STATE_PLAYING, // 播放中
     PLAYER_STATE_PAUSED,  // 暂停
 } player_state_t;
-
 
 /**
  * @brief 播放器控制指令枚举
  */
-typedef enum {
+typedef enum
+{
     PLAYER_CMD_PLAY,
     PLAYER_CMD_PAUSE,
     PLAYER_CMD_RESUME,
@@ -44,7 +45,8 @@ typedef enum {
  * @brief 播放器命令消息结构体
  * 用于通过队列在任务间传递命令
  */
-typedef struct {
+typedef struct
+{
     player_cmd_t cmd;
     char filepath[FILE_PATH_MAX]; // 仅用于 PLAY 命令
     int seek_percent;             // <-- 新增: 用于 SEEK 命令 (0-100)
@@ -53,7 +55,8 @@ typedef struct {
 /**
  * @brief 播放器当前状态信息结构体
  */
-typedef struct {
+typedef struct
+{
     player_state_t state;
     char current_track[FILE_PATH_MAX];
     uint32_t total_duration_sec;
@@ -63,14 +66,6 @@ typedef struct {
     uint16_t bits_per_sample;
     uint32_t byte_rate;
 } player_status_t;
-
-/**
- * @brief FFT 数据回调函数指针类型
- * 当播放器解码出新的音频数据时，会通过此回调函数将数据传出
- * @param data 指向16位PCM音频数据的指针
- * @param len  数据点的数量 (不是字节数)
- */
-typedef void (*fft_data_callback_t)(const int16_t *data, int len);
 
 /**
  * @brief 初始化播放器
@@ -93,15 +88,6 @@ esp_err_t wave_player_init(void);
 esp_err_t wave_player_send_cmd(player_cmd_msg_t *msg);
 
 /**
- * @brief 注册FFT数据回调函数
- *
- * FFT处理任务可以通过此函数注册一个回调，从而实时获取音频数据。
- *
- * @param callback 要注册的回调函数
- */
-void wave_player_register_fft_callback(fft_data_callback_t callback);
-
-/**
  * @brief 获取播放器当前状态
  *
  * 供Web服务器等其他模块查询播放器的实时状态。
@@ -113,17 +99,17 @@ void wave_player_get_status(player_status_t *status);
 // WAV 文件头结构
 typedef struct
 {
-  char riff_header[4];     // "RIFF"
-  uint32_t wav_size;       // size of entire file
-  char wave_header[4];     // "WAVE"
-  char fmt_header[4];      // "fmt "
-  uint32_t fmt_chunk_size; // 16 for PCM
-  uint16_t audio_format;   // 1 for PCM
-  uint16_t num_channels;
-  uint32_t sample_rate;
-  uint32_t byte_rate;
-  uint16_t block_align;
-  uint16_t bits_per_sample;
-  char data_header[4]; // "data"
-  uint32_t data_size;  // size of data section
+    char riff_header[4];     // "RIFF"
+    uint32_t wav_size;       // size of entire file
+    char wave_header[4];     // "WAVE"
+    char fmt_header[4];      // "fmt "
+    uint32_t fmt_chunk_size; // 16 for PCM
+    uint16_t audio_format;   // 1 for PCM
+    uint16_t num_channels;
+    uint32_t sample_rate;
+    uint32_t byte_rate;
+    uint16_t block_align;
+    uint16_t bits_per_sample;
+    char data_header[4]; // "data"
+    uint32_t data_size;  // size of data section
 } wav_header_t;
