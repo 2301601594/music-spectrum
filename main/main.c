@@ -7,8 +7,10 @@
 #include "file_serving_example_common.h"
 #include "wave_player.h"
 #include "fft_analyzer.h"
+#include "led_control.h"
 
 static const char *TAG = "APP_MAIN";
+static led_strip_handle_t led_strip_handle;
 
 /**
  * @brief 一个临时的调试任务，用于打印FFT计算出的频谱高度
@@ -49,6 +51,9 @@ void app_main(void)
 
     // --- 新增: 初始化FFT分析器服务 ---
     ESP_ERROR_CHECK(fft_analyzer_init());
+    // 初始化LED控制器
+    ESP_ERROR_CHECK(led_control_init(&led_strip_handle)); // 初始化LED控制器
+
 
     // 连接到Wi-Fi网络
     ESP_ERROR_CHECK(example_connect());
@@ -57,6 +62,7 @@ void app_main(void)
     ESP_ERROR_CHECK(start_file_and_api_server(base_path));
 
     xTaskCreate(debug_print_task, "debug_print_task", 4096, NULL, 5, NULL);
+    xTaskCreate(led_spectrum_task, "led_spectrum_task", 4096, led_strip_handle, 10, NULL);
 
     ESP_LOGI(TAG, "System initialized successfully. Waiting for connections.");
     // 主任务可以结束或进入低功耗模式，因为所有工作都在其他任务中进行
