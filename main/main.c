@@ -62,7 +62,7 @@ void app_main(void)
     ESP_ERROR_CHECK(start_file_and_api_server(base_path));
 
     xTaskCreate(debug_print_task, "debug_print_task", 4096, NULL, 5, NULL);
-    xTaskCreate(led_spectrum_task, "led_spectrum_task", 4096, led_strip_handle, 10, NULL);
+    xTaskCreate(led_spectrum_task, "led_spectrum_task", 4096, led_strip_handle, 6, NULL);
 
     ESP_LOGI(TAG, "System initialized successfully. Waiting for connections.");
     // 主任务可以结束或进入低功耗模式，因为所有工作都在其他任务中进行
