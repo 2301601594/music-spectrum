@@ -1,7 +1,7 @@
 {
     "version":            "1.2",
     "project_name":       "file_server",
-    "project_version":    "867035e-dirty",
+    "project_version":    "ccfe80a-dirty",
     "project_path":       "/home/dongj/esp/Code/file_serving",
     "idf_path":           "/home/dongj/esp/v5.4.2/esp-idf",
     "build_dir":          "/home/dongj/esp/Code/file_serving/build",

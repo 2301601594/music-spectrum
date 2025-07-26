@@ -76,13 +76,13 @@ void led_spectrum_task(void *pvParm) {
     float smoothed_heights[MATRIX_WIDTH] = {0.0f};
     int peak_y[MATRIX_WIDTH] = {0};
     int64_t last_peak_fall_time = 0;
-    const int PEAK_FALL_DELAY_MS = 120;
+    const int PEAK_FALL_DELAY_MS = 150;
 
     while (1) {
         int64_t start_time = esp_timer_get_time();
         fft_analyzer_get_heights(raw_fft_heights);
         for (int i = 0; i < MATRIX_WIDTH; i++) {
-            smoothed_heights[i] = (smoothed_heights[i] * 1.0f + (float)raw_fft_heights[i] * 3.0f) / 4.0f;
+            smoothed_heights[i] = (smoothed_heights[i] * 2.0f + (float)raw_fft_heights[i] * 2.0f) / 4.0f;
         }
         ESP_ERROR_CHECK(led_strip_clear(led_strip));
         int64_t current_time = esp_timer_get_time() / 1000;

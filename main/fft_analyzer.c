@@ -28,17 +28,7 @@ static float fft_input[FFT_N * 2];
 static float hanning_window[FFT_N];
 
 // --- 核心修改 1: 提供一组更平滑的静态EQ增益曲线 ---
-// 这组增益曲线比之前的更保守，旨在提供一个良好的起点。
-// 强烈建议您根据自己的调试结果来微调这些值。
-static const double band_eq_gains[NUM_BANDS] = {
-    // Lows (Bands 0-7) - 抑制低频
-    0.8, 0.9, 1.0, 1.2, 1.5, 1.8, 2.2, 2.6,
-    // Low-Mids (Bands 8-15) - 从低到中频平滑提升
-    3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5,
-    // High-Mids (Bands 16-23) - 从中频顶峰平滑下降
-    6.5, 6.0, 5.5, 5.0, 4.5, 4.0, 3.5, 3.0,
-    // Highs (Bands 24-31) - 抑制高频
-    2.6, 2.2, 1.8, 1.5, 1.4, 1.3, 1.2, 1.1};
+static const double band_eq_gains[NUM_BANDS] = {0.7,1.03,1.04,1.06,1.08,1.5,1.5,1.51,1.52,1.54,1.56,1.57,1.58,1.59,1.61,1.7,2.30,2.51,3.11,3.22,3.25,3.26,3.52,3.55,4.22,4.24,5.52,5.55,5,6,6,8.88};
 
 // C语言qsort所需的比较函数 (用于对浮点数降序排序)
 static int compare_floats_desc(const void *a, const void *b)
@@ -84,7 +74,7 @@ static void fft_task(void *pvParameters)
 
   while (1)
   {
-    if (xQueueReceive(audio_queue, &chunk, portMAX_DELAY) == pdPASS)
+    if (xQueueReceive(audio_queue, &chunk, 1000) == pdPASS)
     {
       // (音频数据填充逻辑保持不变)
       int samples_to_copy = chunk.len;
@@ -167,11 +157,11 @@ static void fft_task(void *pvParameters)
         qsort(sorted_magnitudes, NUM_BANDS, sizeof(float), compare_floats_desc);
 
         float top5_avg = 0;
-        for (int i = 0; i < 5; i++)
+        for (int i = 0; i < 1; i++)
         {
           top5_avg += sorted_magnitudes[i];
         }
-        top5_avg /= 5;
+        top5_avg /= 1;
 
         // 步骤3: 更新动态“天花板”
         if (top5_avg > dynamic_ceiling)
@@ -194,12 +184,12 @@ static void fft_task(void *pvParameters)
         {
           float normalized_height = (eq_band_magnitudes[i] - MAGNITUDE_FLOOR) / dynamic_range;
 
-          // 可选: 应用伽马校正来调整视觉曲线
-          const float gamma = 0.9f; // gamma < 1.0 会提升中低范围的亮度
-          float powered_height = powf(normalized_height, gamma);
+          // // 可选: 应用伽马校正来调整视觉曲线
+          // const float gamma = 0.9f; // gamma < 1.0 会提升中低范围的亮度
+          // float powered_height = powf(normalized_height, gamma);
 
-          int height = (int)(powered_height * 15.0f); // 映射到0-15
-
+          // int height = (int)(powered_height * 15.0f); // 映射到0-15
+          int height = (int)(normalized_height * 15.0f); // 映射到0-15
           if (height > 15)
             height = 15;
           if (height < 0)
@@ -213,6 +203,17 @@ static void fft_task(void *pvParameters)
         xSemaphoreGive(data_mutex);
         buffer_pos = 0;
       }
+    }
+    else
+    {
+      // --- 核心修改 1 的实现部分 ---
+      // 如果队列接收超时 (没有新的音频数据)，则执行此逻辑
+      xSemaphoreTake(data_mutex, portMAX_DELAY);
+      // 直接将所有频段的高度清零，以实现“音乐停止，频谱归零”
+      memset(display_heights, 0, sizeof(display_heights));
+      // 将动态天花板重置为其初始值，以便音乐恢复时能快速响应
+      dynamic_ceiling = 100.0f;
+      xSemaphoreGive(data_mutex);
     }
   }
 }
