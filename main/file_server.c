@@ -12,6 +12,7 @@
 
 // 包含我们重构后的播放器头文件
 #include "wave_player.h"
+#include "audio_manager.h"
 
 static const char *TAG = "HTTP_SERVER";
 
@@ -128,28 +129,25 @@ static esp_err_t api_playlist_get_handler(httpd_req_t *req)
  * @brief GET /api/status - 获取播放器状态
  * **重构核心**: 直接调用 wave_player_get_status() 获取真实状态。
  */
-static esp_err_t api_status_get_handler(httpd_req_t *req)
-{
+static esp_err_t api_status_get_handler(httpd_req_t *req) {
     player_status_t status;
-    wave_player_get_status(&status); // 从播放器服务获取最新状态
+    wave_player_get_status(&status);
+
+    // 获取当前的系统模式
+    audio_mode_t current_mode = audio_manager_get_mode();
+    const char *mode_str = (current_mode == AUDIO_MODE_PLAYER) ? "player" : "mic";
 
     char json_response[512];
-
-    // 手动查找最后一个'/'来获取文件名，替代basename()
     char *track_basename = strrchr(status.current_track, '/');
-    if (track_basename == NULL)
-    {
-        // 如果没找到'/'，说明路径本身就是文件名
+    if (track_basename == NULL) {
         track_basename = status.current_track;
-    }
-    else
-    {
-        // 如果找到了'/'，将指针移动到'/'后面的字符，即文件名的开始
+    } else {
         track_basename++;
     }
 
     snprintf(json_response, sizeof(json_response),
-             "{\"isPlaying\":%s,\"track\":\"%s\",\"position\":%lu,\"duration\":%lu}",
+             "{\"mode\":\"%s\",\"isPlaying\":%s,\"track\":\"%s\",\"position\":%lu,\"duration\":%lu}",
+             mode_str, // <-- 新增字段
              (status.state == PLAYER_STATE_PLAYING) ? "true" : "false",
              track_basename,
              status.current_position_sec,
@@ -159,7 +157,6 @@ static esp_err_t api_status_get_handler(httpd_req_t *req)
     httpd_resp_send(req, json_response, strlen(json_response));
     return ESP_OK;
 }
-
 /**
  * @brief GET /api/control - 发送控制命令
  * 将HTTP请求翻译成控制命令，并且用wave_player_send_cmd()发送
@@ -243,6 +240,58 @@ static esp_err_t api_control_post_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/**
+ * @brief POST /api/mode - 设置系统工作模式 (全新处理器)
+ */
+static esp_err_t api_mode_post_handler(httpd_req_t *req) {
+    char content[128];
+    int total_len = req->content_len;
+    if (total_len >= sizeof(content)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Request body too long");
+        return ESP_FAIL;
+    }
+    int received = httpd_req_recv(req, content, total_len);
+    if (received <= 0) {
+        return ESP_FAIL;
+    }
+    content[total_len] = '\0';
+
+    cJSON *root = cJSON_Parse(content);
+    if (root == NULL) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_FAIL;
+    }
+
+    cJSON *mode_item = cJSON_GetObjectItem(root, "mode");
+    if (!cJSON_IsString(mode_item)) {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing 'mode' field");
+        return ESP_FAIL;
+    }
+
+    const char *mode_str = mode_item->valuestring;
+    ESP_LOGI(TAG, "Received mode switch request: %s", mode_str);
+
+    audio_mode_t new_mode;
+    if (strcmp(mode_str, "player") == 0) {
+        new_mode = AUDIO_MODE_PLAYER;
+    } else if (strcmp(mode_str, "mic") == 0) {
+        new_mode = AUDIO_MODE_MIC;
+    } else {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid mode specified");
+        return ESP_FAIL;
+    }
+
+    if (audio_manager_set_mode(new_mode) == ESP_OK) {
+        httpd_resp_sendstr(req, "Mode switched successfully.");
+    } else {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to switch mode");
+    }
+
+    cJSON_Delete(root);
+    return ESP_OK;
+}
 /* ------------------- 文件服务处理器 ------------------- */
 /**
  * @brief 处理静态文件下载请求
@@ -309,29 +358,23 @@ static esp_err_t file_download_handler(httpd_req_t *req)
 
 /* ------------------- 服务器启动函数 ------------------- */
 
-esp_err_t start_file_and_api_server(const char *base_path)
-{
-    // 使用新的、简化的上下文结构体
+esp_err_t start_file_and_api_server(const char *base_path) {
     http_server_context_t *server_ctx = calloc(1, sizeof(http_server_context_t));
-    if (!server_ctx)
-    {
-        return ESP_ERR_NO_MEM;
-    }
+    if (!server_ctx) return ESP_ERR_NO_MEM;
     strlcpy(server_ctx->base_path, base_path, sizeof(server_ctx->base_path));
 
     httpd_handle_t server = NULL;
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.uri_match_fn = httpd_uri_match_wildcard;
-    config.lru_purge_enable = true; // 启用LRU清理，对内存有限的设备友好
+    config.lru_purge_enable = true;
 
-    if (httpd_start(&server, &config) != ESP_OK)
-    {
+    if (httpd_start(&server, &config) != ESP_OK) {
         ESP_LOGE(TAG, "Failed to start file server!");
         free(server_ctx);
         return ESP_FAIL;
     }
 
-    // 注册API处理器
+    // --- 注册API处理器 ---
     const httpd_uri_t playlist_api_uri = {"/api/playlist", HTTP_GET, api_playlist_get_handler, server_ctx};
     httpd_register_uri_handler(server, &playlist_api_uri);
 
@@ -340,6 +383,10 @@ esp_err_t start_file_and_api_server(const char *base_path)
 
     const httpd_uri_t control_api_uri = {"/api/control", HTTP_POST, api_control_post_handler, server_ctx};
     httpd_register_uri_handler(server, &control_api_uri);
+
+    // **新增**: 注册新的模式切换API处理器
+    const httpd_uri_t mode_api_uri = {"/api/mode", HTTP_POST, api_mode_post_handler, server_ctx};
+    httpd_register_uri_handler(server, &mode_api_uri);
 
     // 注册通用文件处理器
     const httpd_uri_t file_download_uri = {"/*", HTTP_GET, file_download_handler, server_ctx};

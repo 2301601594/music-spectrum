@@ -8,6 +8,8 @@
 #include "wave_player.h"
 #include "fft_analyzer.h"
 #include "led_control.h"
+#include "audio_manager.h"
+#include "mic_input.h"
 
 static const char *TAG = "APP_MAIN";
 static led_strip_handle_t led_strip_handle;
@@ -46,13 +48,17 @@ void app_main(void)
     const char *base_path = "/sdcard";
     ESP_ERROR_CHECK(example_mount_storage(base_path));
 
-    // 初始化播放器服务
+ // 1. 初始化底层音频模块
     ESP_ERROR_CHECK(wave_player_init());
+    ESP_ERROR_CHECK(mic_input_init());
 
-    // --- 新增: 初始化FFT分析器服务 ---
+    // 2. 初始化音频处理和显示模块
     ESP_ERROR_CHECK(fft_analyzer_init());
-    // 初始化LED控制器
-    ESP_ERROR_CHECK(led_control_init(&led_strip_handle)); // 初始化LED控制器
+    ESP_ERROR_CHECK(led_control_init(&led_strip_handle));
+
+    // 3. 初始化顶层逻辑控制器
+    ESP_ERROR_CHECK(audio_manager_init());
+
 
 
     // 连接到Wi-Fi网络
