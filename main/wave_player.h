@@ -17,7 +17,7 @@
 // 文件最长路径
 #define FILE_PATH_MAX 256
 // I2S读取/写入缓存区大小
-#define I2S_BUFFER_SIZE 1024
+#define I2S_BUFFER_SIZE 2048
 
 /**
  * @brief 播放器状态枚举

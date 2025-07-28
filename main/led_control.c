@@ -80,11 +80,29 @@ void led_spectrum_task(void *pvParm) {
 
     while (1) {
         int64_t start_time = esp_timer_get_time();
+
+        // 1. 从FFT分析器获取最新的频段高度数据
         fft_analyzer_get_heights(raw_fft_heights);
-        for (int i = 0; i < MATRIX_WIDTH; i++) {
-            smoothed_heights[i] = (smoothed_heights[i] * 2.0f + (float)raw_fft_heights[i] * 2.0f) / 4.0f;
+
+        // 2. 更新每个LED列的平滑值和峰值
+        for (int x = 0; x < MATRIX_WIDTH; x++) {
+            // --- 核心修改：反转数据源的索引 ---
+            // 将物理列 x (0..31) 映射到反转后的FFT数据索引 (31..0)
+            int fft_data_index = (MATRIX_WIDTH - 1) - x;
+
+            // 使用反转后的数据更新当前列的平滑值
+            smoothed_heights[x] = (smoothed_heights[x] * 0.75f) + ((float)raw_fft_heights[fft_data_index] * 0.25f);
+
+            // 使用反转后的数据更新当前列的峰值
+            if (raw_fft_heights[fft_data_index] > peak_y[x]) {
+                peak_y[x] = raw_fft_heights[fft_data_index];
+            }
         }
+
+        // 3. 清空屏幕，准备绘制新的一帧
         ESP_ERROR_CHECK(led_strip_clear(led_strip));
+
+        // 4. 处理峰值点的自然下落
         int64_t current_time = esp_timer_get_time() / 1000;
         if (current_time - last_peak_fall_time > PEAK_FALL_DELAY_MS) {
             last_peak_fall_time = current_time;
@@ -92,11 +110,13 @@ void led_spectrum_task(void *pvParm) {
                 if (peak_y[i] > 0) peak_y[i]--;
             }
         }
+
+        // 5. 绘制所有灯柱和峰值点
         for (int x = 0; x < MATRIX_WIDTH; x++) {
             int display_height = (int)(smoothed_heights[x] + 0.5f);
-            if (raw_fft_heights[x] > peak_y[x]) {
-                peak_y[x] = raw_fft_heights[x];
-            }
+            if (display_height > MATRIX_HEIGHT) display_height = MATRIX_HEIGHT;
+
+            // 绘制灯柱
             for (int y = 0; y < display_height; y++) {
                 rgb_t color = spectrum_colors[y];
                 uint8_t r = (color.r * BRIGHTNESS) / 255;
@@ -107,6 +127,8 @@ void led_spectrum_task(void *pvParm) {
                     ESP_ERROR_CHECK(led_strip_set_pixel(led_strip, index, r, g, b));
                 }
             }
+
+            // 绘制峰值点
             int peak_draw_y = peak_y[x];
             if (peak_draw_y >= MATRIX_HEIGHT) peak_draw_y = MATRIX_HEIGHT - 1;
             if (peak_draw_y < display_height) peak_draw_y = display_height;
@@ -116,14 +138,15 @@ void led_spectrum_task(void *pvParm) {
                 ESP_ERROR_CHECK(led_strip_set_pixel(led_strip, peak_index, peak_brightness, peak_brightness, peak_brightness));
             }
         }
+
+        // 6. 刷新屏幕以显示新的一帧
         ESP_ERROR_CHECK(led_strip_refresh(led_strip));
+
+        // 7. 控制帧率
         int64_t elapsed_us = esp_timer_get_time() - start_time;
-        int64_t sleep_us = 20000 - elapsed_us; // 20ms周期
+        int64_t sleep_us = 20000 - elapsed_us; // 目标帧率 50fps (20ms)
         if (sleep_us > 0) {
-            esp_rom_delay_us(sleep_us);
-        } else {
-          ;
-            //ESP_LOGW(TAG, "LED refresh task overrun by %lld us", -sleep_us);
+            vTaskDelay(pdMS_TO_TICKS(sleep_us / 1000));
         }
     }
 }
