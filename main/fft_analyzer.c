@@ -8,8 +8,8 @@
 #include "math.h"
 #include <string.h>
 #include <stdlib.h>
+#include "esp_timer.h" // 新增: 用于高精度计时
 
-// 新增: 包含音频管理器头文件以获取当前模式
 #include "audio_manager.h"
 
 static const char *TAG = "FFT_ANALYZER";
@@ -17,6 +17,11 @@ static const char *TAG = "FFT_ANALYZER";
 // --- 配置常量 ---
 #define AGC_TOP_N_BANDS 3
 #define GAMMA_CORRECTION 0.9f
+#define NOISE_GATE_THRESHOLD 300.0f
+#define AGC_MIN_CEILING 600.0f
+#define SIGNAL_PRESENCE_THRESHOLD (NOISE_GATE_THRESHOLD * 1.2f)
+#define LOW_SIGNAL_DURATION_MS 500
+
 
 typedef struct {
     int16_t *data;
@@ -31,60 +36,36 @@ static uint8_t display_heights[NUM_BANDS] = {0};
 static float fft_input[FFT_N * 2];
 static float hanning_window[FFT_N];
 
-// --- 核心修改 1: 为不同模式定义独立的静态EQ增益曲线 ---
-
-/**
- * @brief 播放器模式EQ曲线 (激进型)
- * 用于处理高质量、干净的WAV音源，旨在创造最佳视觉效果。
- */
+// --- EQ增益曲线 ---
 static const double band_eq_gains_player[NUM_BANDS] = {
-    // 低频抑制, 中频平稳, 高频大幅增强
-    0.50, 0.60, 0.70, 0.80, 0.90, 1.0, 1.1, 1.2,
-    1.3,  1.4,  1.5,  1.6,  1.7,  1.8,  1.9,  2.0,
-    2.5,  3.0,  3.5,  4.0,  5.0,  6.0,  7.5,  9.0,
-    11.0, 13.0, 15.0, 18.0, 22.0, 26.0, 30.0, 35.0
+    0.50, 0.60, 0.70, 0.80, 0.90, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0,
+    2.5, 3.0, 3.5, 4.0, 5.0, 6.0, 7.5, 9.0, 11.0, 13.0, 15.0, 18.0, 22.0, 26.0, 30.0, 35.0
 };
-
-/**
- * @brief 麦克风模式EQ曲线 (保守型)
- * 用于处理包含环境噪声的原始音源，旨在真实反映并避免过度放大噪声。
- */
 static const double band_eq_gains_mic[NUM_BANDS] = {
-    // 轻微抑制极低频噪声, 中高频做适度补偿性提升
-    0.8,  0.9,  1.0,  1.0,  1.1,  1.1,  1.2,  1.2,
-    1.3,  1.3,  1.4,  1.4,  1.5,  1.6,  1.7,  1.8,
-    1.9,  2.0,  2.1,  2.2,  2.4,  2.6,  2.8,  3.0,
-    3.2,  3.5,  3.8,  4.2,  4.6,  5.0,  5.5,  0.5
+    0.8, 0.9, 1.0, 1.0, 1.1, 1.1, 1.2, 1.2, 1.3, 1.3, 1.4, 1.4, 1.5, 1.6, 1.7, 1.8,
+    1.9, 2.0, 2.1, 2.2, 2.4, 2.6, 2.8, 3.0, 3.2, 3.5, 3.8, 4.2, 4.6, 5.0, 5.5, 3.0
 };
 
 // 辅助函数: 用于qsort的降序比较
-static int compare_floats_desc(const void *a, const void *b)
-{
-  float fa = *(const float *)a;
-  float fb = *(const float *)b;
-  if (fa < fb)
-    return 1;
-  if (fa > fb)
-    return -1;
-  return 0;
+static int compare_floats_desc(const void *a, const void *b) {
+    float fa = *(const float *)a;
+    float fb = *(const float *)b;
+    if (fa < fb) return 1;
+    if (fa > fb) return -1;
+    return 0;
 }
 
 // 辅助函数: 累加指定范围内的FFT幅值
-static double fft_add_c(const float *magnitudes_array, int from, int to)
-{
-  double result = 0;
-  int upper_bound = (to < FFT_N / 2) ? to : (FFT_N / 2 - 1);
-  for (int i = from; i <= upper_bound; i++)
-  {
-    result += magnitudes_array[i];
-  }
-  return result;
+static double fft_add_c(const float *magnitudes_array, int from, int to) {
+    double result = 0;
+    int upper_bound = (to < FFT_N / 2) ? to : (FFT_N / 2 - 1);
+    for (int i = from; i <= upper_bound; i++) {
+        result += magnitudes_array[i];
+    }
+    return result;
 }
 
-
-/**
- * @brief FFT处理核心任务
- */
+// FFT处理核心任务
 static void fft_task(void *pvParameters) {
     esp_err_t ret = dsps_fft2r_init_fc32(NULL, CONFIG_DSP_MAX_FFT_SIZE);
     if (ret != ESP_OK) {
@@ -94,9 +75,11 @@ static void fft_task(void *pvParameters) {
     }
     dsps_wind_hann_f32(hanning_window, FFT_N);
 
-    static float dynamic_ceiling = 100.0f;
+    static float dynamic_ceiling = AGC_MIN_CEILING;
     const float MAGNITUDE_FLOOR = 20.0f;
     const float CEILING_DECAY_RATE = 0.992f;
+
+    static int64_t low_signal_start_time = 0;
 
     int16_t *audio_buffer = (int16_t *)malloc(FFT_N * sizeof(int16_t));
     int buffer_pos = 0;
@@ -105,14 +88,13 @@ static void fft_task(void *pvParameters) {
     while (1) {
         if (xQueueReceive(audio_queue, &chunk, pdMS_TO_TICKS(100)) == pdPASS) {
             // 音频数据填充逻辑
-            int samples_in_chunk = chunk.len;
             int frames_to_process = 0;
             if (chunk.channels == 1) {
-                frames_to_process = samples_in_chunk;
+                frames_to_process = chunk.len;
                 if (buffer_pos + frames_to_process > FFT_N) frames_to_process = FFT_N - buffer_pos;
                 memcpy(&audio_buffer[buffer_pos], chunk.data, frames_to_process * sizeof(int16_t));
             } else if (chunk.channels == 2) {
-                frames_to_process = samples_in_chunk / 2;
+                frames_to_process = chunk.len / 2;
                 if (buffer_pos + frames_to_process > FFT_N) frames_to_process = FFT_N - buffer_pos;
                 for (int i = 0; i < frames_to_process; i++) {
                     audio_buffer[buffer_pos + i] = (chunk.data[i * 2] + chunk.data[i * 2 + 1]) / 2;
@@ -122,7 +104,7 @@ static void fft_task(void *pvParameters) {
             free(chunk.data);
 
             if (buffer_pos >= FFT_N) {
-                // FFT准备和计算
+                // FFT计算
                 for (int i = 0; i < FFT_N; i++) {
                     fft_input[i * 2] = (float)audio_buffer[i] * hanning_window[i];
                     fft_input[i * 2 + 1] = 0.0f;
@@ -136,11 +118,9 @@ static void fft_task(void *pvParameters) {
                     magnitudes[i] = sqrtf(real * real + imag * imag);
                 }
 
-                // --- 核心修改 2: 根据当前模式选择EQ曲线 ---
                 audio_mode_t current_mode = audio_manager_get_mode();
                 const double *active_eq_gains = (current_mode == AUDIO_MODE_PLAYER) ? band_eq_gains_player : band_eq_gains_mic;
-
-                // 使用被选中的EQ曲线进行计算
+                
                 float eq_band_magnitudes[NUM_BANDS];
                 eq_band_magnitudes[0] = (fft_add_c(magnitudes, 3, 4)) / 2 * active_eq_gains[0];
                 eq_band_magnitudes[1] = (fft_add_c(magnitudes, 4, 5)) / 2 * active_eq_gains[1];
@@ -174,20 +154,45 @@ static void fft_task(void *pvParameters) {
                 eq_band_magnitudes[29] = (fft_add_c(magnitudes, 170, 194)) / 25 * active_eq_gains[29];
                 eq_band_magnitudes[30] = (fft_add_c(magnitudes, 194, 224)) / 31 * active_eq_gains[30];
                 eq_band_magnitudes[31] = (fft_add_c(magnitudes, 224, 255)) / 32 * active_eq_gains[31];
-                
-                // AGC 和高度计算
+
+                // 应用噪声门
+                if (current_mode == AUDIO_MODE_MIC) {
+                    for (int i = 0; i < NUM_BANDS; i++) {
+                        if (eq_band_magnitudes[i] < NOISE_GATE_THRESHOLD) {
+                            eq_band_magnitudes[i] = 0.0f;
+                        }
+                    }
+                }
+
+                // 智能AGC逻辑
                 float sorted_magnitudes[NUM_BANDS];
                 memcpy(sorted_magnitudes, eq_band_magnitudes, sizeof(eq_band_magnitudes));
                 qsort(sorted_magnitudes, NUM_BANDS, sizeof(float), compare_floats_desc);
-                float top_n_avg = 0;
-                for (int i = 0; i < AGC_TOP_N_BANDS; i++) top_n_avg += sorted_magnitudes[i];
-                top_n_avg /= AGC_TOP_N_BANDS;
-                if (top_n_avg > dynamic_ceiling) dynamic_ceiling = top_n_avg;
-                else dynamic_ceiling *= CEILING_DECAY_RATE;
-                float current_ceiling = (dynamic_ceiling > MAGNITUDE_FLOOR) ? dynamic_ceiling : MAGNITUDE_FLOOR;
+                
+                float peak_magnitude = sorted_magnitudes[0];
+
+                if (peak_magnitude > SIGNAL_PRESENCE_THRESHOLD) {
+                    float top_n_avg = 0;
+                    for (int i = 0; i < AGC_TOP_N_BANDS; i++) top_n_avg += sorted_magnitudes[i];
+                    top_n_avg /= AGC_TOP_N_BANDS;
+
+                    if (top_n_avg > dynamic_ceiling) {
+                        dynamic_ceiling = top_n_avg;
+                    } else {
+                        dynamic_ceiling *= CEILING_DECAY_RATE;
+                    }
+                    if (dynamic_ceiling < AGC_MIN_CEILING) {
+                        dynamic_ceiling = AGC_MIN_CEILING;
+                    }
+                    low_signal_start_time = 0;
+                } else {
+                    dynamic_ceiling = AGC_MIN_CEILING;
+                }
+                
                 uint8_t new_heights[NUM_BANDS];
-                float dynamic_range = current_ceiling - MAGNITUDE_FLOOR;
+                float dynamic_range = dynamic_ceiling - MAGNITUDE_FLOOR;
                 if (dynamic_range < 1.0f) dynamic_range = 1.0f;
+
                 for (int i = 0; i < NUM_BANDS; i++) {
                     float normalized_height = (eq_band_magnitudes[i] - MAGNITUDE_FLOOR) / dynamic_range;
                     float powered_height = powf(fmaxf(0.0f, normalized_height), GAMMA_CORRECTION);
@@ -197,17 +202,42 @@ static void fft_task(void *pvParameters) {
                     new_heights[i] = height;
                 }
 
+                // 实现延迟噪声门逻辑
+                if (current_mode == AUDIO_MODE_MIC && peak_magnitude <= SIGNAL_PRESENCE_THRESHOLD) {
+                    if (low_signal_start_time == 0) {
+                        low_signal_start_time = esp_timer_get_time();
+                    } else {
+                        int64_t elapsed_us = esp_timer_get_time() - low_signal_start_time;
+                        if (elapsed_us >= (LOW_SIGNAL_DURATION_MS * 1000)) {
+                            memset(new_heights, 0, sizeof(new_heights));
+                        }
+                    }
+                }
+
+                // **新增**: 稀疏频谱强制归零逻辑
+                if (current_mode == AUDIO_MODE_MIC) {
+                    int zero_count = 0;
+                    for (int i = 0; i < NUM_BANDS; i++) {
+                        if (new_heights[i] == 0) {
+                            zero_count++;
+                        }
+                    }
+                    // 如果超过3/4的列为0，则全部归零
+                    if (zero_count >= (NUM_BANDS * 3 / 4)) {
+                        memset(new_heights, 0, sizeof(new_heights));
+                    }
+                }
+                
                 xSemaphoreTake(data_mutex, portMAX_DELAY);
                 memcpy(display_heights, new_heights, sizeof(new_heights));
                 xSemaphoreGive(data_mutex);
                 buffer_pos = 0;
             }
         } else {
-            // --- 核心修改 3: 超时处理根据模式区分 ---
+            // 超时处理
             audio_mode_t current_mode = audio_manager_get_mode();
             xSemaphoreTake(data_mutex, portMAX_DELAY);
             if (current_mode == AUDIO_MODE_PLAYER) {
-                // 播放器模式: 音乐结束，缓慢衰减
                 bool changed = false;
                 for(int i = 0; i < NUM_BANDS; i++) {
                     if(display_heights[i] > 0) {
@@ -216,14 +246,15 @@ static void fft_task(void *pvParameters) {
                     }
                 }
                 if(!changed) {
-                    dynamic_ceiling = MAGNITUDE_FLOOR;
+                    dynamic_ceiling = AGC_MIN_CEILING;
                 }
             } else { // AUDIO_MODE_MIC
-                // 麦克风模式: 环境安静，立即归零
                 memset(display_heights, 0, sizeof(display_heights));
-                dynamic_ceiling = MAGNITUDE_FLOOR;
+                dynamic_ceiling = AGC_MIN_CEILING;
             }
             xSemaphoreGive(data_mutex);
+            
+            low_signal_start_time = 0;
         }
     }
     free(audio_buffer);
