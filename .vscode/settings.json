@@ -22,6 +22,7 @@
     "sdkconfig.h": "c",
     "freertos.h": "c",
     "task.h": "c",
-    "inttypes.h": "c"
+    "inttypes.h": "c",
+    "queue.h": "c"
   }
 }

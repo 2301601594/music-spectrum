@@ -67,7 +67,7 @@ void app_main(void)
     // 启动文件和API服务器
     ESP_ERROR_CHECK(start_file_and_api_server(base_path));
 
-    xTaskCreate(debug_print_task, "debug_print_task", 4096, NULL, 5, NULL);
+    //xTaskCreate(debug_print_task, "debug_print_task", 4096, NULL, 5, NULL);
     xTaskCreate(led_spectrum_task, "led_spectrum_task", 4096, led_strip_handle, 6, NULL);
 
     ESP_LOGI(TAG, "System initialized successfully. Waiting for connections.");
