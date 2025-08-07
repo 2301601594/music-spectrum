@@ -51,3 +51,17 @@ esp_err_t led_control_init(led_strip_handle_t *led_strip);
  * @param pvParm 传入的参数，这里是 led_strip_handle_t 句柄
  */
 void led_spectrum_task(void *pvParm);
+
+/**
+ * @brief 设置当前的颜色主题模式
+ *
+ * @param mode 颜色模式 (0: 默认, 1: 火焰, 2: 森林)
+ */
+void led_control_set_color_mode(int mode);
+
+/**
+ * @brief 获取当前的颜色主题模式
+ *
+ * @return int 当前的颜色模式
+ */
+int led_control_get_color_mode(void);

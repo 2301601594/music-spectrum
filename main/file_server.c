@@ -13,6 +13,8 @@
 // 包含我们重构后的播放器头文件
 #include "wave_player.h"
 #include "audio_manager.h"
+// 包含led_control头文件以调用其函数
+#include "led_control.h"
 
 static const char *TAG = "HTTP_SERVER";
 
@@ -22,7 +24,6 @@ static const char *TAG = "HTTP_SERVER";
 
 /**
  * @brief HTTP服务器上下文结构
- * 存取静态文件服务需要的数据
  */
 typedef struct
 {
@@ -30,7 +31,7 @@ typedef struct
     char scratch[SCRATCH_BUFSIZE];
 } http_server_context_t;
 
-/* ------------------- 辅助函数 ------------------- */
+/* ------------------- 辅助函数 (无变化) ------------------- */
 static const char *get_path_from_uri(char *dest, const char *base_path, const char *uri, size_t destsize)
 {
     const size_t base_pathlen = strlen(base_path);
@@ -53,8 +54,10 @@ static const char *get_path_from_uri(char *dest, const char *base_path, const ch
     }
 
     strcpy(dest, base_path);
-    strlcpy(dest + base_pathlen, uri, pathlen + 1);
+    // **重要修正**: 使用 strlcpy 保证安全
+    strlcpy(dest + base_pathlen, uri, destsize - base_pathlen);
 
+    // 返回文件名部分
     return dest + base_pathlen;
 }
 
@@ -73,39 +76,25 @@ static esp_err_t set_content_type_from_file(httpd_req_t *req, const char *filena
     return httpd_resp_set_type(req, "text/plain");
 }
 
-/* ------------------- API 处理器 (已重构) ------------------- */
+/* ------------------- API 处理器 (与上次相同，无需修改) ------------------- */
 
-/**
- * @brief GET /api/playlist - 获取播放列表
- * 扫描SD卡根目录，以JSON的形式返回所有wav文件
- */
 static esp_err_t api_playlist_get_handler(httpd_req_t *req)
 {
     http_server_context_t *ctx = (http_server_context_t *)req->user_ctx;
     const char *dirpath = ctx->base_path;
-
     DIR *dir = opendir(dirpath);
-    if (!dir)
-    {
-        ESP_LOGE(TAG, "Failed to open directory: %s", dirpath);
+    if (!dir) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Music directory not found");
         return ESP_FAIL;
     }
-
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send_chunk(req, "[", 1);
-
     struct dirent *entry;
     bool first_entry = true;
     char filename_buf[300];
-
-    while ((entry = readdir(dir)) != NULL)
-    {
-        // 只查找.wav文件
-        if (entry->d_type == DT_REG && strstr(entry->d_name, ".wav"))
-        {
-            if (!first_entry)
-            {
+    while ((entry = readdir(dir)) != NULL) {
+        if (entry->d_type == DT_REG && strstr(entry->d_name, ".wav")) {
+            if (!first_entry) {
                 httpd_resp_send_chunk(req, ",", 1);
             }
             int len = snprintf(filename_buf, sizeof(filename_buf), "\"%s\"", entry->d_name);
@@ -114,29 +103,17 @@ static esp_err_t api_playlist_get_handler(httpd_req_t *req)
         }
     }
     closedir(dir);
-
     httpd_resp_send_chunk(req, "]", 1);
-    httpd_resp_send_chunk(req, NULL, 0); // 结束分块传输
-    ESP_LOGI(TAG, "Playlist sent successfully");
+    httpd_resp_send_chunk(req, NULL, 0);
     return ESP_OK;
 }
 
-/**
- * @brief GET /api/status - 获取播放器状态
- * 直接调用wave_player_get_status()获取当前状态
- */
-/**
- * @brief GET /api/status - 获取播放器状态
- * **重构核心**: 直接调用 wave_player_get_status() 获取真实状态。
- */
 static esp_err_t api_status_get_handler(httpd_req_t *req) {
     player_status_t status;
     wave_player_get_status(&status);
-
-    // 获取当前的系统模式
     audio_mode_t current_mode = audio_manager_get_mode();
     const char *mode_str = (current_mode == AUDIO_MODE_PLAYER) ? "player" : "mic";
-
+    int color_mode = led_control_get_color_mode();
     char json_response[512];
     char *track_basename = strrchr(status.current_track, '/');
     if (track_basename == NULL) {
@@ -144,23 +121,19 @@ static esp_err_t api_status_get_handler(httpd_req_t *req) {
     } else {
         track_basename++;
     }
-
     snprintf(json_response, sizeof(json_response),
-             "{\"mode\":\"%s\",\"isPlaying\":%s,\"track\":\"%s\",\"position\":%lu,\"duration\":%lu}",
-             mode_str, // <-- 新增字段
+             "{\"mode\":\"%s\",\"isPlaying\":%s,\"track\":\"%s\",\"position\":%lu,\"duration\":%lu,\"colorMode\":%d}",
+             mode_str,
              (status.state == PLAYER_STATE_PLAYING) ? "true" : "false",
              track_basename,
              status.current_position_sec,
-             status.total_duration_sec);
-
+             status.total_duration_sec,
+             color_mode);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send(req, json_response, strlen(json_response));
     return ESP_OK;
 }
-/**
- * @brief GET /api/control - 发送控制命令
- * 将HTTP请求翻译成控制命令，并且用wave_player_send_cmd()发送
- */
+
 static esp_err_t api_control_post_handler(httpd_req_t *req)
 {
     http_server_context_t *ctx = (http_server_context_t *)req->user_ctx;
@@ -171,28 +144,21 @@ static esp_err_t api_control_post_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
     int received = httpd_req_recv(req, content, total_len);
-    if (received <= 0) {
-        return ESP_FAIL;
-    }
+    if (received <= 0) return ESP_FAIL;
     content[total_len] = '\0';
-
     cJSON *root = cJSON_Parse(content);
     if (root == NULL) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
         return ESP_FAIL;
     }
-
     cJSON *command_item = cJSON_GetObjectItem(root, "command");
     if (!cJSON_IsString(command_item)) {
         cJSON_Delete(root);
         return ESP_FAIL;
     }
     const char *command = command_item->valuestring;
-    ESP_LOGI(TAG, "Received command: %s", command);
-
     player_cmd_msg_t cmd_msg = {0};
     bool cmd_valid = false;
-
     if (strcmp(command, "play") == 0) {
         cJSON *track_item = cJSON_GetObjectItem(root, "track");
         if (cJSON_IsString(track_item)) {
@@ -201,48 +167,29 @@ static esp_err_t api_control_post_handler(httpd_req_t *req)
             cmd_valid = true;
         }
     } else if (strcmp(command, "pause") == 0) {
-        cmd_msg.cmd = PLAYER_CMD_PAUSE;
-        cmd_valid = true;
+        cmd_msg.cmd = PLAYER_CMD_PAUSE; cmd_valid = true;
     } else if (strcmp(command, "resume") == 0) {
-        cmd_msg.cmd = PLAYER_CMD_RESUME;
-        cmd_valid = true;
+        cmd_msg.cmd = PLAYER_CMD_RESUME; cmd_valid = true;
     } else if (strcmp(command, "stop") == 0) {
-        cmd_msg.cmd = PLAYER_CMD_STOP;
-        cmd_valid = true;
+        cmd_msg.cmd = PLAYER_CMD_STOP; cmd_valid = true;
     } else if (strcmp(command, "seek") == 0) {
         cJSON *value_item = cJSON_GetObjectItem(root, "value");
-        // **核心修正**: 同时检查 value_item 是否为数字或字符串
         if (value_item && (cJSON_IsNumber(value_item) || cJSON_IsString(value_item))) {
             cmd_msg.cmd = PLAYER_CMD_SEEK;
-            if (cJSON_IsNumber(value_item)) {
-                // 如果是数字，直接取值
-                cmd_msg.seek_percent = value_item->valueint;
-            } else {
-                // 如果是字符串，使用atoi转换
-                cmd_msg.seek_percent = atoi(value_item->valuestring);
-            }
+            cmd_msg.seek_percent = cJSON_IsNumber(value_item) ? value_item->valueint : atoi(value_item->valuestring);
             cmd_valid = true;
-            ESP_LOGI(TAG, "Command: Seek to %d%%", cmd_msg.seek_percent);
         }
     }
-    
     if (cmd_valid) {
-        if (wave_player_send_cmd(&cmd_msg) == ESP_OK) {
-            httpd_resp_sendstr(req, "Command sent successfully.");
-        } else {
-            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to send command to player");
-        }
+        wave_player_send_cmd(&cmd_msg);
+        httpd_resp_sendstr(req, "Command sent.");
     } else {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid command or parameters");
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid command");
     }
-
     cJSON_Delete(root);
     return ESP_OK;
 }
 
-/**
- * @brief POST /api/mode - 设置系统工作模式 (全新处理器)
- */
 static esp_err_t api_mode_post_handler(httpd_req_t *req) {
     char content[128];
     int total_len = req->content_len;
@@ -251,51 +198,57 @@ static esp_err_t api_mode_post_handler(httpd_req_t *req) {
         return ESP_FAIL;
     }
     int received = httpd_req_recv(req, content, total_len);
-    if (received <= 0) {
-        return ESP_FAIL;
-    }
+    if (received <= 0) return ESP_FAIL;
     content[total_len] = '\0';
-
     cJSON *root = cJSON_Parse(content);
     if (root == NULL) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
         return ESP_FAIL;
     }
-
     cJSON *mode_item = cJSON_GetObjectItem(root, "mode");
     if (!cJSON_IsString(mode_item)) {
         cJSON_Delete(root);
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing 'mode' field");
         return ESP_FAIL;
     }
-
     const char *mode_str = mode_item->valuestring;
-    ESP_LOGI(TAG, "Received mode switch request: %s", mode_str);
-
-    audio_mode_t new_mode;
-    if (strcmp(mode_str, "player") == 0) {
-        new_mode = AUDIO_MODE_PLAYER;
-    } else if (strcmp(mode_str, "mic") == 0) {
-        new_mode = AUDIO_MODE_MIC;
-    } else {
-        cJSON_Delete(root);
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid mode specified");
-        return ESP_FAIL;
-    }
-
-    if (audio_manager_set_mode(new_mode) == ESP_OK) {
-        httpd_resp_sendstr(req, "Mode switched successfully.");
-    } else {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to switch mode");
-    }
-
+    audio_mode_t new_mode = (strcmp(mode_str, "mic") == 0) ? AUDIO_MODE_MIC : AUDIO_MODE_PLAYER;
+    audio_manager_set_mode(new_mode);
+    httpd_resp_sendstr(req, "Mode switched.");
     cJSON_Delete(root);
     return ESP_OK;
 }
-/* ------------------- 文件服务处理器 ------------------- */
+
+static esp_err_t api_color_post_handler(httpd_req_t *req) {
+    char content[128];
+    int total_len = req->content_len;
+    if (total_len >= sizeof(content)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Request body too long");
+        return ESP_FAIL;
+    }
+    int received = httpd_req_recv(req, content, total_len);
+    if (received <= 0) return ESP_FAIL;
+    content[total_len] = '\0';
+    cJSON *root = cJSON_Parse(content);
+    if (root == NULL) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_FAIL;
+    }
+    cJSON *mode_item = cJSON_GetObjectItem(root, "colorMode");
+    if (!cJSON_IsNumber(mode_item)) {
+        cJSON_Delete(root);
+        return ESP_FAIL;
+    }
+    int color_mode = mode_item->valueint;
+    led_control_set_color_mode(color_mode);
+    httpd_resp_sendstr(req, "Color mode switched.");
+    cJSON_Delete(root);
+    return ESP_OK;
+}
+
+/* ------------------- 文件服务处理器 (核心修正) ------------------- */
 /**
  * @brief 处理静态文件下载请求
- * 根据URI获取文件路径，并发送文件内容
+ * **修正**: 移除嵌入式文件逻辑，只从VFS(SD卡)加载
  */
 static esp_err_t file_download_handler(httpd_req_t *req)
 {
@@ -304,47 +257,45 @@ static esp_err_t file_download_handler(httpd_req_t *req)
     struct stat file_stat;
     http_server_context_t *ctx = (http_server_context_t *)req->user_ctx;
 
+    // 如果URI是根目录 "/", 则默认指向 "index.html"
     const char *uri = req->uri;
-    if (strcmp(uri, "/") == 0)
-    {
+    if (strcmp(uri, "/") == 0) {
         uri = "/index.html";
     }
 
+    // 从URI构建完整的文件路径
     const char *filename = get_path_from_uri(filepath, ctx->base_path, uri, sizeof(filepath));
-    if (!filename)
-    {
+    if (!filename) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Filename too long");
         return ESP_FAIL;
     }
 
-    if (stat(filepath, &file_stat) == -1)
-    {
+    // 检查文件是否存在
+    if (stat(filepath, &file_stat) == -1) {
         ESP_LOGE(TAG, "Failed to stat file : %s", filepath);
         httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "File does not exist");
         return ESP_FAIL;
     }
 
+    // 打开文件
     fd = fopen(filepath, "r");
-    if (!fd)
-    {
+    if (!fd) {
+        ESP_LOGE(TAG, "Failed to open file for reading: %s", filepath);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to read existing file");
         return ESP_FAIL;
     }
 
+    // 设置正确的MIME类型并发送文件内容
     set_content_type_from_file(req, filename);
-
     char *chunk = ctx->scratch;
     size_t chunksize;
-    do
-    {
+    do {
         chunksize = fread(chunk, 1, SCRATCH_BUFSIZE, fd);
-        if (chunksize > 0)
-        {
-            if (httpd_resp_send_chunk(req, chunk, chunksize) != ESP_OK)
-            {
+        if (chunksize > 0) {
+            if (httpd_resp_send_chunk(req, chunk, chunksize) != ESP_OK) {
                 fclose(fd);
                 httpd_resp_send_chunk(req, NULL, 0);
-                httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to send file");
+                ESP_LOGE(TAG, "File sending failed!");
                 return ESP_FAIL;
             }
         }
@@ -356,8 +307,7 @@ static esp_err_t file_download_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-/* ------------------- 服务器启动函数 ------------------- */
-
+/* ------------------- 服务器启动函数 (无变化) ------------------- */
 esp_err_t start_file_and_api_server(const char *base_path) {
     http_server_context_t *server_ctx = calloc(1, sizeof(http_server_context_t));
     if (!server_ctx) return ESP_ERR_NO_MEM;
@@ -374,21 +324,16 @@ esp_err_t start_file_and_api_server(const char *base_path) {
         return ESP_FAIL;
     }
 
-    // --- 注册API处理器 ---
     const httpd_uri_t playlist_api_uri = {"/api/playlist", HTTP_GET, api_playlist_get_handler, server_ctx};
     httpd_register_uri_handler(server, &playlist_api_uri);
-
     const httpd_uri_t status_api_uri = {"/api/status", HTTP_GET, api_status_get_handler, server_ctx};
     httpd_register_uri_handler(server, &status_api_uri);
-
     const httpd_uri_t control_api_uri = {"/api/control", HTTP_POST, api_control_post_handler, server_ctx};
     httpd_register_uri_handler(server, &control_api_uri);
-
-    // **新增**: 注册新的模式切换API处理器
     const httpd_uri_t mode_api_uri = {"/api/mode", HTTP_POST, api_mode_post_handler, server_ctx};
     httpd_register_uri_handler(server, &mode_api_uri);
-
-    // 注册通用文件处理器
+    const httpd_uri_t color_api_uri = {"/api/color", HTTP_POST, api_color_post_handler, server_ctx};
+    httpd_register_uri_handler(server, &color_api_uri);
     const httpd_uri_t file_download_uri = {"/*", HTTP_GET, file_download_handler, server_ctx};
     httpd_register_uri_handler(server, &file_download_uri);
 

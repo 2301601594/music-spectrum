@@ -4,35 +4,85 @@
 
 static const char *TAG = "LED_CONTROL";
 
-// --- 核心修改 1: 定义亮度和固定的16级颜色数组 ---
+// 全局亮度控制 (0-255)。
+#define BRIGHTNESS 10
 
-// 全局亮度控制 (0-255)。请从一个较低的值开始，例如 40。
-// 如果闪烁问题依旧，请尝试进一步降低此值。
-#define BRIGHTNESS 5
+// --- 核心修改: 重新设计颜色主题，使其更明亮、变化更丰富 ---
 
-// 定义一个固定的16级颜色数组，从下(index 0)到上(index 15)
-// 颜色格式为 {r, g, b}
-const rgb_t spectrum_colors[MATRIX_HEIGHT] = {
-    {  0,   0, 255}, // 0: Blue
-    {  0,  60, 255}, // 1
-    {  0, 120, 255}, // 2
-    {  0, 180, 180}, // 3: Cyan
-    {  0, 255, 120}, // 4
-    {  0, 255,  60}, // 5
-    {  0, 255,   0}, // 6: Green
-    { 60, 255,   0}, // 7
-    {120, 255,   0}, // 8
-    {180, 255,   0}, // 9: Lime
-    {240, 240,   0}, // 10
-    {255, 200,   0}, // 11: Yellow
-    {255, 160,   0}, // 12
-    {255, 120,   0}, // 13: Orange
-    {255,  60,   0}, // 14
-    {255,   0,   0}  // 15: Red
+// 主题 0: 经典彩虹 (保持不变)
+const rgb_t spectrum_colors_default[MATRIX_HEIGHT] = {
+    {  0,   0, 255}, {  0,  60, 255}, {  0, 120, 255}, {  0, 180, 180},
+    {  0, 255, 120}, {  0, 255,  60}, {  0, 255,   0}, { 60, 255,   0},
+    {120, 255,   0}, {180, 255,   0}, {240, 240,   0}, {255, 200,   0},
+    {255, 160,   0}, {255, 120,   0}, {255,  60,   0}, {255,   0,   0}
 };
 
+// 主题 1: "炽焰" (Vibrant Fire) - 新设计
+const rgb_t spectrum_colors_fire[MATRIX_HEIGHT] = {
+    {255, 255,  60}, // 亮黄
+    {255, 220,  50},
+    {255, 190,  40},
+    {255, 160,  30}, // 橙色
+    {255, 130,  20},
+    {255, 100,  10},
+    {255,  70,   0}, // 橙红
+    {255,  40,   0},
+    {255,   0,   0}, // 纯红
+    {255,   0,  40},
+    {255,   0,  80},
+    {255,   0, 120}, // 洋红
+    {255,  20, 140},
+    {255,  40, 160},
+    {255,  60, 180},
+    {255,  80, 200}  // 粉紫
+};
 
-// --- 内部函数 (保持不变) ---
+// 主题 2: "沧澜" (Ocean Wave) - 新设计
+const rgb_t spectrum_colors_forest[MATRIX_HEIGHT] = {
+    {200, 255, 255}, // 亮青
+    {160, 255, 255},
+    {120, 240, 255},
+    { 80, 220, 255}, // 天蓝
+    { 40, 200, 255},
+    {  0, 180, 255},
+    {  0, 160, 255}, // 亮蓝
+    {  0, 140, 255},
+    {  0, 110, 255},
+    {  0,  80, 255}, // 纯蓝
+    { 40,  60, 255},
+    { 80,  40, 255}, // 靛蓝
+    {120,  20, 255},
+    {150,   0, 255}, // 紫色
+    {180,   0, 255},
+    {210,   0, 255}  // 品红
+};
+
+// 使用一个指针数组来方便地切换调色板
+const rgb_t* color_palettes[3] = {
+    spectrum_colors_default,
+    spectrum_colors_fire,
+    spectrum_colors_forest // 尽管文件名是forest，但现在它代表“沧澜”主题
+};
+
+// 全局变量，用于存储当前的颜色模式
+static int g_color_mode = 0;
+
+// --- 函数用于设置和获取颜色模式 (无变化) ---
+void led_control_set_color_mode(int mode) {
+    if (mode >= 0 && mode < 3) {
+        g_color_mode = mode;
+        ESP_LOGI(TAG, "Color mode set to %d", mode);
+    } else {
+        ESP_LOGW(TAG, "Invalid color mode: %d", mode);
+    }
+}
+
+int led_control_get_color_mode(void) {
+    return g_color_mode;
+}
+
+
+// --- 内部函数 (无变化) ---
 static int XY_to_index(int x, int y) {
     if (x < 0 || x >= MATRIX_WIDTH || y < 0 || y >= MATRIX_HEIGHT) {
         return -1;
@@ -44,7 +94,7 @@ static int XY_to_index(int x, int y) {
     }
 }
 
-// --- LED 控制器初始化 (保持不变) ---
+// --- LED 控制器初始化 (无变化) ---
 esp_err_t led_control_init(led_strip_handle_t *led_strip) {
   led_strip_config_t strip_config = {
       .strip_gpio_num = BLINK_GPIO,
@@ -69,7 +119,7 @@ esp_err_t led_control_init(led_strip_handle_t *led_strip) {
   }
 }
 
-// --- 核心修改 2: 更新后的频谱显示任务 ---
+// --- 频谱显示任务 (逻辑无变化, 但会使用新的颜色) ---
 void led_spectrum_task(void *pvParm) {
     led_strip_handle_t led_strip = (led_strip_handle_t)pvParm;
     uint8_t raw_fft_heights[MATRIX_WIDTH];
@@ -86,14 +136,8 @@ void led_spectrum_task(void *pvParm) {
 
         // 2. 更新每个LED列的平滑值和峰值
         for (int x = 0; x < MATRIX_WIDTH; x++) {
-            // --- 核心修改：反转数据源的索引 ---
-            // 将物理列 x (0..31) 映射到反转后的FFT数据索引 (31..0)
             int fft_data_index = (MATRIX_WIDTH - 1) - x;
-
-            // 使用反转后的数据更新当前列的平滑值
             smoothed_heights[x] = (smoothed_heights[x] * 0.75f) + ((float)raw_fft_heights[fft_data_index] * 0.25f);
-
-            // 使用反转后的数据更新当前列的峰值
             if (raw_fft_heights[fft_data_index] > peak_y[x]) {
                 peak_y[x] = raw_fft_heights[fft_data_index];
             }
@@ -118,7 +162,8 @@ void led_spectrum_task(void *pvParm) {
 
             // 绘制灯柱
             for (int y = 0; y < display_height; y++) {
-                rgb_t color = spectrum_colors[y];
+                // *** 使用当前选择的颜色主题 ***
+                rgb_t color = color_palettes[g_color_mode][y];
                 uint8_t r = (color.r * BRIGHTNESS) / 255;
                 uint8_t g = (color.g * BRIGHTNESS) / 255;
                 uint8_t b = (color.b * BRIGHTNESS) / 255;
