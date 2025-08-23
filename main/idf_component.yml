@@ -3,3 +3,4 @@ dependencies:
     path: ${IDF_PATH}/examples/common_components/protocol_examples_common
   espressif/esp-dsp: ^1.7.0
   espressif/led_strip: ^3.0.1~1
+  espressif/servo: ^0.1.0

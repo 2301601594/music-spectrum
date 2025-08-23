@@ -10,6 +10,7 @@
 #include "led_control.h"
 #include "audio_manager.h"
 #include "mic_input.h"
+#include "servo.h"
 
 static const char *TAG = "APP_MAIN";
 static led_strip_handle_t led_strip_handle;
@@ -55,6 +56,7 @@ void app_main(void)
     // 2. 初始化音频处理和显示模块
     ESP_ERROR_CHECK(fft_analyzer_init());
     ESP_ERROR_CHECK(led_control_init(&led_strip_handle));
+    ESP_ERROR_CHECK(servo_init());
 
     // 3. 初始化顶层逻辑控制器
     ESP_ERROR_CHECK(audio_manager_init());
@@ -69,6 +71,7 @@ void app_main(void)
 
     //xTaskCreate(debug_print_task, "debug_print_task", 4096, NULL, 5, NULL);
     xTaskCreate(led_spectrum_task, "led_spectrum_task", 4096, led_strip_handle, 6, NULL);
+    xTaskCreate(servo_task, "servo_task", 4096, NULL, 6, NULL);
 
     ESP_LOGI(TAG, "System initialized successfully. Waiting for connections.");
     // 主任务可以结束或进入低功耗模式，因为所有工作都在其他任务中进行

@@ -849,6 +849,13 @@
 /home/dongj/esp/Code/file_serving/build/esp-idf/espressif__led_strip/CMakeFiles/install.dir
 /home/dongj/esp/Code/file_serving/build/esp-idf/espressif__led_strip/CMakeFiles/install/local.dir
 /home/dongj/esp/Code/file_serving/build/esp-idf/espressif__led_strip/CMakeFiles/install/strip.dir
+/home/dongj/esp/Code/file_serving/build/esp-idf/espressif__servo/CMakeFiles/__idf_espressif__servo.dir
+/home/dongj/esp/Code/file_serving/build/esp-idf/espressif__servo/CMakeFiles/edit_cache.dir
+/home/dongj/esp/Code/file_serving/build/esp-idf/espressif__servo/CMakeFiles/rebuild_cache.dir
+/home/dongj/esp/Code/file_serving/build/esp-idf/espressif__servo/CMakeFiles/list_install_components.dir
+/home/dongj/esp/Code/file_serving/build/esp-idf/espressif__servo/CMakeFiles/install.dir
+/home/dongj/esp/Code/file_serving/build/esp-idf/espressif__servo/CMakeFiles/install/local.dir
+/home/dongj/esp/Code/file_serving/build/esp-idf/espressif__servo/CMakeFiles/install/strip.dir
 /home/dongj/esp/Code/file_serving/build/esp-idf/protocol_examples_common/CMakeFiles/__idf_protocol_examples_common.dir
 /home/dongj/esp/Code/file_serving/build/esp-idf/protocol_examples_common/CMakeFiles/edit_cache.dir
 /home/dongj/esp/Code/file_serving/build/esp-idf/protocol_examples_common/CMakeFiles/rebuild_cache.dir

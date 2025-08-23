@@ -17,7 +17,7 @@ static const char *TAG = "FFT_ANALYZER";
 // --- 配置常量 ---
 #define AGC_TOP_N_BANDS 3
 #define GAMMA_CORRECTION 0.9f
-#define NOISE_GATE_THRESHOLD 300.0f
+#define NOISE_GATE_THRESHOLD 200.0f
 #define AGC_MIN_CEILING 600.0f
 #define SIGNAL_PRESENCE_THRESHOLD (NOISE_GATE_THRESHOLD * 1.2f)
 #define LOW_SIGNAL_DURATION_MS 500
@@ -43,7 +43,7 @@ static const double band_eq_gains_player[NUM_BANDS] = {
 };
 static const double band_eq_gains_mic[NUM_BANDS] = {
     0.8, 0.9, 1.0, 1.0, 1.1, 1.1, 1.2, 1.2, 1.3, 1.3, 1.4, 1.4, 1.5, 1.6, 1.7, 1.8,
-    1.9, 2.0, 2.1, 2.2, 2.4, 2.6, 2.8, 3.0, 3.2, 3.5, 3.8, 4.2, 4.6, 5.0, 5.5, 3.0
+    2.9, 3.0, 3.1, 3.2, 3.4, 3.6, 3.8, 4.0, 4.2, 4.5, 4.8, 5.2, 5.6, 5.0, 5.5, 3.0
 };
 
 // 辅助函数: 用于qsort的降序比较

@@ -23,6 +23,7 @@
     "freertos.h": "c",
     "task.h": "c",
     "inttypes.h": "c",
-    "queue.h": "c"
+    "queue.h": "c",
+    "iot_servo.h": "c"
   }
 }
