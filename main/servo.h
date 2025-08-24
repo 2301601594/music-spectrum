@@ -5,6 +5,9 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "iot_servo.h"
+#include "fft_analyzer.h"
+#include "esp_timer.h"
+#include "math.h"
 
 // 定义舵机管脚
 #define SERVO_CH0_PIN GPIO_NUM_7
@@ -14,6 +17,7 @@ esp_err_t servo_init();
 
 // 舵机任务
 void servo_task(void *pvParam);
+
 
 
 
